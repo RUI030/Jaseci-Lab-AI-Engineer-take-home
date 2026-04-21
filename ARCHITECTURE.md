@@ -15,7 +15,7 @@ Chatbot  (IO only)
 
 ```python
 chatbot = Chatbot()
-agent = ClaimAgent(chatbot=chatbot, model_id="gemini")
+agent = ClaimAgent(chatbot=chatbot)
 agent.process_claim("claims/CLM-001/")
 ```
 
@@ -55,16 +55,41 @@ class Chatbot:
 
 **Why deterministic routing is justified here:** Insurance claim processing has well-defined states and transition rules. Fully dynamic LLM-driven tool selection would introduce unpredictability in a compliance-sensitive domain. The right tradeoff is conditional dispatch (LangGraph decides based on state) rather than either a hardcoded sequence or unconstrained LLM autonomy.
 
+**Hybrid model strategy:** Task-to-model assignment is defined in
+`config/settings.yaml` under `task_model_map`. `ClaimAgent` reads this
+map at initialisation and instantiates the appropriate `BaseLLMClient`
+for each role. Task roles are:
+
+  vision  — document parsing (PDFReader, ImageReader)
+  logic   — cross-validation, status determination, message generation
+  reply   — customer reply parsing (TextReader)
+
+Routing is done at call time: each internal method receives the client
+for its role, not a model_id string. This keeps task routing as a
+configuration concern, not a code concern.
+
+**Async reply support via LangGraph checkpointing:** `ClaimAgent.accept_reply()`
+is designed as a resumable entry point. `ClaimState` is fully serialisable
+(all fields are Pydantic models), allowing LangGraph's checkpointer to
+suspend execution after `generate_customer_message` and resume when a
+reply arrives — without blocking a thread. The CLI implementation uses
+synchronous `input()` for testing, but the state machine itself imposes
+no blocking requirement. Replacing the CLI with a webhook or message
+queue requires no changes to `ClaimAgent` logic.
+
 #### ADT
 
 ```python
 class ClaimAgent:
     chatbot: Chatbot
-    model_id: str
+    llm_clients: dict[str, BaseLLMClient]
+    # keyed by task role, e.g.:
+    # { "vision": GeminiAdapter, "logic": QwenAdapter }
+    # instantiated from config/settings.yaml task_model_map at __init__ time
     workflow_config: dict       # loaded from config/workflow.yaml
     message_config: dict        # loaded from config/messages.yaml
 
-    def __init__(self, chatbot: Chatbot, model_id: str) -> None
+    def __init__(self, chatbot: Chatbot) -> None
     def process_claim(self, folder_path: str, uploaded_at: str | None = None) -> Claim
     # uploaded_at: ISO 8601 string; falls back to folder mtime if None
     def accept_reply(self, claim: Claim) -> Claim
@@ -264,7 +289,7 @@ class BaseDocReader:
         self,
         prompt: str,
         files: list[str] | None,
-        model_id: str
+        client: BaseLLMClient
     ) -> dict
     # centralised VLM call with exponential backoff (3 attempts)
     # raises ParseFailedError on final failure
@@ -288,6 +313,48 @@ class DocReaderFactory:
     # .pdf  → PDFReader (with ImageReader fallback)
     # .png / .jpg → ImageReader
     # .txt  → TextReader
+```
+
+---
+
+### 6. LLM Adapters
+
+**File:** `llm_adapters.py`
+
+**Responsibility:** Abstracts all VLM API calls behind a common interface.
+Each adapter handles SDK initialization, prompt formatting, JSON schema
+enforcement, and response parsing for its specific provider. No other
+layer calls a VLM SDK directly.
+
+#### ADT
+
+```python
+class BaseLLMClient:
+    def generate(
+        self,
+        prompt: str,
+        response_schema: type[BaseModel],
+        files: list[str] | None = None
+    ) -> dict
+    # raises ParseFailedError on malformed response after retries
+
+class GeminiAdapter(BaseLLMClient):
+    # enforces structured output via response_mime_type + response_schema
+    # handles Pydantic → Gemini-compatible schema conversion
+    # note: not all Pydantic field types are supported; adapter holds escape hatch
+    def generate(self, prompt, response_schema, files=None) -> dict
+
+class QwenAdapter(BaseLLMClient):
+    # enforces structured output via OpenAI-compatible response_format
+    # handles Pydantic → JSON schema conversion
+    def generate(self, prompt, response_schema, files=None) -> dict
+
+class LLMClientFactory:
+    @staticmethod
+    def get_client(model_id: str) -> BaseLLMClient
+    # "gemini" → GeminiAdapter
+    # "qwen"   → QwenAdapter
+    # unsupported model_id → raises ValueError
 ```
 
 ---
@@ -403,7 +470,7 @@ Retry logic lives in `BaseDocReader.call_vlm()` and is not duplicated in subclas
 | API timeout | Exponential backoff, 3 attempts via `call_vlm()`. On final failure → `parse_status = "parse_failed"`, status → `pending` |
 | PDF with no text layer | `PDFReader` detects low text volume (below `pdf_text_threshold` in `config/settings.yaml`) and falls back to `ImageReader` |
 | Unknown doc type | `doc_type = "unknown"`, status → `pending`, no field extraction attempted |
-| `model_id` not supported | `ValueError` raised at `ClaimAgent.__init__()`, before any processing begins |
+| `model_id` not supported | `ValueError` raised at `LLMClientFactory.get_client()`, before any processing begins |
 
 ---
 
@@ -472,7 +539,7 @@ claims/
 | `config/field_schema.json` | Field definitions, validation rules, unify instructions |
 | `config/workflow.yaml` | Agent workflow rules and trigger conditions |
 | `config/messages.yaml` | Outbound message templates and priority reason strings |
-| `config/settings.yaml` | Runtime parameters (e.g. `pdf_text_threshold`) |
+| `config/settings.yaml` | Runtime parameters including `pdf_text_threshold` and `task_model_map` (task-to-model assignment) |
 
 ---
 
@@ -519,3 +586,9 @@ claims/
 **API layer:** `Chatbot` can be replaced with a FastAPI endpoint. `Claim` serialises to JSON via Pydantic.
 
 **Multi-claim parallelism:** A queue-based dispatcher could run multiple `ClaimAgent` instances concurrently with minimal architectural changes.
+
+**Non-blocking reply handling:** Because `ClaimState` is fully
+serialisable, the system can be extended to suspend after sending a
+customer message and resume on an inbound webhook or queue event. The
+LangGraph checkpoint mechanism supports this without changes to
+`ClaimParser` or `Claim`.
