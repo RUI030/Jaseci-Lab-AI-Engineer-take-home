@@ -55,19 +55,6 @@ class Chatbot:
 
 **Why deterministic routing is justified here:** Insurance claim processing has well-defined states and transition rules. Fully dynamic LLM-driven tool selection would introduce unpredictability in a compliance-sensitive domain. The right tradeoff is conditional dispatch (LangGraph decides based on state) rather than either a hardcoded sequence or unconstrained LLM autonomy.
 
-**Hybrid model strategy:** Task-to-model assignment is defined in
-`config/settings.yaml` under `task_model_map`. `ClaimAgent` reads this
-map at initialisation and instantiates the appropriate `BaseLLMClient`
-for each role. Task roles are:
-
-  vision  — document parsing (PDFReader, ImageReader)
-  logic   — cross-validation, status determination, message generation
-  reply   — customer reply parsing (TextReader)
-
-Routing is done at call time: each internal method receives the client
-for its role, not a model_id string. This keeps task routing as a
-configuration concern, not a code concern.
-
 **Async reply support via LangGraph checkpointing:** `ClaimAgent.accept_reply()`
 is designed as a resumable entry point. `ClaimState` is fully serialisable
 (all fields are Pydantic models), allowing LangGraph's checkpointer to
@@ -82,10 +69,8 @@ queue requires no changes to `ClaimAgent` logic.
 ```python
 class ClaimAgent:
     chatbot: Chatbot
-    llm_clients: dict[str, BaseLLMClient]
-    # keyed by task role, e.g.:
-    # { "vision": GeminiAdapter, "logic": QwenAdapter }
-    # instantiated from config/settings.yaml task_model_map at __init__ time
+    llm_client: BaseLLMClient
+    # single adapter instance, instantiated from model_id in config/settings.yaml
     workflow_config: dict       # loaded from config/workflow.yaml
     message_config: dict        # loaded from config/messages.yaml
 
@@ -94,7 +79,7 @@ class ClaimAgent:
     # uploaded_at: ISO 8601 string; falls back to folder mtime if None
     def accept_reply(self, claim: Claim) -> Claim
     # calls chatbot.ask() to get reply_text
-    # then calls ClaimParser.handle_reply(claim, reply_text, model_id)
+    # then calls ClaimParser.handle_reply(claim, reply_text, self.llm_client)
     def prioritize_claims(self, claims: list[Claim]) -> list[PriorityRecord]
 ```
 
@@ -209,7 +194,7 @@ class ClaimParser:
     def parse_reply(
         self, reply_text: str,
         target_fields: list[FieldSchema],
-        model_id: str
+        client: BaseLLMClient
     ) -> list[ExtractedField]
     # calls TextReader with XML isolation
     # source_trust hard-set to "user_input", confidence hard-capped at low
@@ -231,7 +216,7 @@ class ClaimParser:
     def handle_reply(
         self, claim: Claim,
         reply_text: str,
-        model_id: str
+        client: BaseLLMClient
     ) -> Claim
     # orchestrator: parse_reply → compare_fields → log_reply → determine_status
 ```
@@ -282,7 +267,7 @@ class BaseDocReader:
         self,
         file_path: str,
         target_fields: list[FieldSchema],
-        model_id: str
+        client: BaseLLMClient       # injected from ClaimAgent.llm_clients
     ) -> list[ExtractedField]
 
     def call_vlm(
@@ -295,17 +280,17 @@ class BaseDocReader:
     # raises ParseFailedError on final failure
 
 class PDFReader(BaseDocReader):
-    def read(self, file_path, target_fields, model_id) -> list[ExtractedField]
+    def read(self, file_path, target_fields, client: BaseLLMClient) -> list[ExtractedField]
     # checks extracted text volume against config pdf_text_threshold
     # falls back to ImageReader if below threshold
 
 class ImageReader(BaseDocReader):
     def preprocess(self, file_path: str) -> str     # deskew, returns processed path
-    def read(self, file_path, target_fields, model_id) -> list[ExtractedField]
+    def read(self, file_path, target_fields, client: BaseLLMClient) -> list[ExtractedField]
 
 class TextReader(BaseDocReader):
     # wraps content in XML isolation tags before sending to VLM
-    def read(self, file_path, target_fields, model_id) -> list[ExtractedField]
+    def read(self, file_path, target_fields, client: BaseLLMClient) -> list[ExtractedField]
 
 class DocReaderFactory:
     @staticmethod
@@ -482,10 +467,11 @@ Folder path
     ▼
 ClaimAgent
     │  loads workflow.yaml + messages.yaml
+    │  instantiates llm_client from model_id (config/settings.yaml)
     │  calls chatbot.ask() / chatbot.display() as needed
     │
     ├── DocReaderFactory → PDFReader / ImageReader / TextReader
-    │       └── BaseDocReader.call_vlm() (retry logic here)
+    │       └── BaseDocReader.call_vlm(client)   ← ClaimAgent.llm_client
     │               └── list[ExtractedField] → stored in DocRecord.fields
     │
     ├── ClaimParser.cross_validate
@@ -501,7 +487,7 @@ ClaimAgent
     ├── [if customer replies]
     │       ClaimAgent.accept_reply
     │           → chatbot.ask() → reply_text
-    │           → ClaimParser.handle_reply
+    │           → ClaimParser.handle_reply(claim, reply_text, client)   ← ClaimAgent.llm_client
     │               ├── parse_reply (TextReader, source_trust = "user_input")
     │               ├── compare_fields
     │               ├── log_reply → conversation_log
@@ -539,7 +525,7 @@ claims/
 | `config/field_schema.json` | Field definitions, validation rules, unify instructions |
 | `config/workflow.yaml` | Agent workflow rules and trigger conditions |
 | `config/messages.yaml` | Outbound message templates and priority reason strings |
-| `config/settings.yaml` | Runtime parameters including `pdf_text_threshold` and `task_model_map` (task-to-model assignment) |
+| `config/settings.yaml` | Runtime parameters including `pdf_text_threshold` and `model_id` (VLM provider selection) |
 
 ---
 
@@ -565,6 +551,8 @@ claims/
 
 **Retry logic is centralised.** All VLM calls go through `BaseDocReader.call_vlm()`. Retry behaviour (exponential backoff, 3 attempts) is implemented once and inherited by all subclasses.
 
+**LLM adapter layer isolates SDK dependencies.** No layer outside `llm_adapters.py` calls a VLM SDK directly. `BaseLLMClient` is the only interface the rest of the system depends on. Swapping providers or adding a new model requires only a new adapter class and updating `model_id` in `config/settings.yaml` — no changes to `DocReader`, `ClaimParser`, or `ClaimAgent`.
+
 **`ParsedDocument` removed.** Fields and raw text are stored directly in `DocRecord`, eliminating a redundant intermediate structure.
 
 **Single source of truth for claim state.** `claim_state.json` is the only persisted record. `conversation_log` is part of `Claim` and serialised within it. No separate `conversation.json` to avoid data drift between two files representing the same information.
@@ -575,11 +563,11 @@ claims/
 
 ## Scale-up Considerations
 
+**Hybrid model routing:** The single `llm_client` on `ClaimAgent` can be extended to a role-keyed map (`dict[str, BaseLLMClient]`) when multi-model routing is needed — for example, routing vision-heavy tasks to Gemini and logic tasks to a different model. The `BaseLLMClient` interface already supports this; it requires only a `task_model_map` config entry and a small change to `ClaimAgent.__init__`. No other layer needs to change.
+
 **Parallel document processing:** `DocReader` is stateless. Multiple files can be processed concurrently with `asyncio` or a thread pool.
 
-**ModelBackend abstraction:** A `BaseModelBackend` class with per-provider subclasses would replace the current `model_id` if/else dispatch for cleaner multi-model support.
-
-**Confidence-based model fallback:** Low-confidence extractions could retry with a larger model before escalating to human review. Straightforward to add inside `DocReader` without changing any other layer.
+**Confidence-based model fallback:** Low-confidence extractions could retry with a larger model before escalating to human review. Straightforward to add inside `DocReader` by passing a different `BaseLLMClient` on retry — no changes required outside that layer.
 
 **Persistent state:** `claim_state.json` is structured to load into PostgreSQL or Redis without changes.
 
@@ -587,8 +575,4 @@ claims/
 
 **Multi-claim parallelism:** A queue-based dispatcher could run multiple `ClaimAgent` instances concurrently with minimal architectural changes.
 
-**Non-blocking reply handling:** Because `ClaimState` is fully
-serialisable, the system can be extended to suspend after sending a
-customer message and resume on an inbound webhook or queue event. The
-LangGraph checkpoint mechanism supports this without changes to
-`ClaimParser` or `Claim`.
+**Non-blocking reply handling:** Because `ClaimState` is fully serialisable, the system can be extended to suspend after sending a customer message and resume on an inbound webhook or queue event. The LangGraph checkpoint mechanism supports this without changes to `ClaimParser` or `Claim`.
