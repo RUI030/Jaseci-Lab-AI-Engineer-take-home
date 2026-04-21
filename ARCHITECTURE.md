@@ -55,6 +55,19 @@ class Chatbot:
 
 **Why deterministic routing is justified here:** Insurance claim processing has well-defined states and transition rules. Fully dynamic LLM-driven tool selection would introduce unpredictability in a compliance-sensitive domain. The right tradeoff is conditional dispatch (LangGraph decides based on state) rather than either a hardcoded sequence or unconstrained LLM autonomy.
 
+**Hybrid model strategy:** Task-to-model assignment is defined in
+`config/settings.yaml` under `task_model_map`. `ClaimAgent` reads this
+map at initialisation and instantiates the appropriate `BaseLLMClient`
+for each role. Task roles are:
+
+  vision  — document parsing (PDFReader, ImageReader)
+  logic   — cross-validation, status determination, message generation
+  reply   — customer reply parsing (TextReader)
+
+Routing is done at call time: each internal method receives the client
+for its role, not a model_id string. This keeps task routing as a
+configuration concern, not a code concern.
+
 **Async reply support via LangGraph checkpointing:** `ClaimAgent.accept_reply()`
 is designed as a resumable entry point. `ClaimState` is fully serialisable
 (all fields are Pydantic models), allowing LangGraph's checkpointer to
@@ -69,8 +82,10 @@ queue requires no changes to `ClaimAgent` logic.
 ```python
 class ClaimAgent:
     chatbot: Chatbot
-    llm_client: BaseLLMClient
-    # single adapter instance, instantiated from model_id in config/settings.yaml
+    llm_clients: dict[str, BaseLLMClient]
+    # keyed by task role, e.g.:
+    # { "vision": GeminiAdapter, "logic": QwenAdapter }
+    # instantiated from config/settings.yaml task_model_map at __init__ time
     workflow_config: dict       # loaded from config/workflow.yaml
     message_config: dict        # loaded from config/messages.yaml
 
@@ -525,7 +540,7 @@ claims/
 | `config/field_schema.json` | Field definitions, validation rules, unify instructions |
 | `config/workflow.yaml` | Agent workflow rules and trigger conditions |
 | `config/messages.yaml` | Outbound message templates and priority reason strings |
-| `config/settings.yaml` | Runtime parameters including `pdf_text_threshold` and `model_id` (VLM provider selection) |
+| `config/settings.yaml` | Runtime parameters including `pdf_text_threshold` and `task_model_map` (task-to-model assignment) |
 
 ---
 
@@ -575,4 +590,8 @@ claims/
 
 **Multi-claim parallelism:** A queue-based dispatcher could run multiple `ClaimAgent` instances concurrently with minimal architectural changes.
 
-**Non-blocking reply handling:** Because `ClaimState` is fully serialisable, the system can be extended to suspend after sending a customer message and resume on an inbound webhook or queue event. The LangGraph checkpoint mechanism supports this without changes to `ClaimParser` or `Claim`.
+**Non-blocking reply handling:** Because `ClaimState` is fully
+serialisable, the system can be extended to suspend after sending a
+customer message and resume on an inbound webhook or queue event. The
+LangGraph checkpoint mechanism supports this without changes to
+`ClaimParser` or `Claim`.
