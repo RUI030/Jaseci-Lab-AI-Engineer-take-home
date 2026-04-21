@@ -1,0 +1,20 @@
+tools:
+  parse_documents:
+    trigger: on_start
+    description: "Parse all files in the claim folder using DocReaderFactory"
+
+  cross_validate:
+    trigger: after_all_docs_parsed
+    description: "Cross-validate extracted fields across documents and determine status"
+
+  generate_customer_message:
+    trigger:
+      status_in: [incomplete, pending]
+    description: "Generate and display a customer message based on validation issues"
+
+  accept_reply:
+    trigger: on_inbound_message
+    description: "Accept customer reply text and re-evaluate claim"
+
+routing:
+  max_reply_rounds: 3
