@@ -214,6 +214,49 @@ def test_prioritize_claims_oldest_first_within_same_status(monkeypatch):
     assert records[0].claim_id == "CLM-OLD"
 
 
+def test_process_claim_txt_auto_loaded_as_reply(monkeypatch, tmp_path):
+    """A .txt file in the claim folder is queued as a customer reply, not sent to the VLM."""
+    claim_dir = tmp_path / "CLM-TXT"
+    claim_dir.mkdir()
+    (claim_dir / "customer_reply.txt").write_text("My VIN is 1HGCM82633A004352")
+
+    mock_client = MagicMock()
+    # Only called during handle_reply (reply text processing), NOT for the .txt file itself
+    mock_client.generate.return_value = {"doc_type": "unknown", "fields": []}
+
+    with patch("core.llm_adapters.LLMClientFactory.get_client", return_value=mock_client):
+        agent = ClaimAgent(chatbot=Chatbot())
+
+    with patch("builtins.input", return_value=""):
+        claim = agent.process_claim(str(claim_dir))
+
+    txt_records = [r for r in claim.doc_table if r.file_name == "customer_reply.txt"]
+    assert len(txt_records) == 1
+    assert txt_records[0].doc_type == "customer_reply"
+    # Reply was auto-consumed — conversation log should have an inbound round
+    assert any(r.direction == "inbound" for r in claim.conversation_log)
+
+
+def test_process_claim_txt_not_classified_by_vlm(monkeypatch, tmp_path):
+    """VLM must not be called for .txt file classification — only for reply processing."""
+    claim_dir = tmp_path / "CLM-TXT2"
+    claim_dir.mkdir()
+    (claim_dir / "note.txt").write_text("some content")
+
+    mock_client = MagicMock()
+    mock_client.generate.return_value = {"doc_type": "unknown", "fields": []}
+
+    with patch("core.llm_adapters.LLMClientFactory.get_client", return_value=mock_client):
+        agent = ClaimAgent(chatbot=Chatbot())
+
+    with patch("builtins.input", return_value=""):
+        agent.process_claim(str(claim_dir))
+
+    # generate should only be called once: during handle_reply (reply text extraction)
+    # NOT once for the .txt file itself
+    assert mock_client.generate.call_count <= 1
+
+
 def test_prioritize_claims_reason_populated(monkeypatch):
     agent = _make_agent_with_mock_llm(monkeypatch)
     claims = [_make_claim("complete", claim_id="CLM-001")]

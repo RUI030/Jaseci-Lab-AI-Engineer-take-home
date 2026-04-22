@@ -33,7 +33,8 @@ class ClaimState(TypedDict):
     workflow_config: dict
     message_config: dict
     parser: Any
-    reply_skipped: bool  # True when user pressed Enter without a reply
+    reply_skipped: bool   # True when user pressed Enter without a reply
+    reply_queue: list     # raw text from .txt files; consumed one-per-round by node_accept_reply
 
 
 # --- Graph nodes ---
@@ -101,6 +102,23 @@ def node_parse_documents(state: ClaimState) -> ClaimState:
         if content_hash:
             seen_hashes[content_hash] = file_name
 
+        # --- .txt files are always customer replies — skip VLM, queue for node_accept_reply ---
+        if file_path.suffix.lower() == ".txt":
+            content = file_path.read_text(encoding="utf-8", errors="replace")
+            state["reply_queue"].append(content)
+            record = DocRecord(
+                file_name=file_name,
+                doc_type="customer_reply",
+                doc_role="optional",
+                source_trust="user_input",
+                parse_status="complete",
+                doc_status="present",
+                content_hash=content_hash,
+                raw_text=content,
+            )
+            claim.doc_table.append(record)
+            continue
+
         # --- classify and read the document ---
         claim.tools_used.append(classify_document(file_name))
         try:
@@ -138,10 +156,11 @@ def node_parse_documents(state: ClaimState) -> ClaimState:
                 claim.extracted_fields[field.field_name] = field
 
     # --- multiple_versions: flag later-processed docs when same doc_type appears more than once ---
+    # Exclude customer_reply — multiple .txt files are sequential replies, not version conflicts.
     from collections import Counter
     type_counts = Counter(
         r.doc_type for r in claim.doc_table
-        if r.doc_status == "present" and r.doc_type != "unknown"
+        if r.doc_status == "present" and r.doc_type not in ("unknown", "customer_reply")
     )
     for doc_type, count in type_counts.items():
         if count > 1:
@@ -157,6 +176,9 @@ def node_parse_documents(state: ClaimState) -> ClaimState:
                     f"Multiple '{doc_type}' documents found; "
                     f"'{authoritative}' treated as authoritative."
                 )
+
+    # --- resolve multiple_versions: compare fields, add blocking/warning ValidationIssues ---
+    state["parser"].resolve_multiple_versions(claim)
 
     # --- placeholder DocRecords for missing required docs ---
     # Only mark as missing if the type was neither successfully parsed
@@ -216,7 +238,13 @@ def node_accept_reply(state: ClaimState) -> ClaimState:
     parser: ClaimParser = state["parser"]
     client: BaseLLMClient = state["llm_client"]
 
-    reply_text = chatbot.ask("\nPlease type the customer's reply (or press Enter to skip): ")
+    if state["reply_queue"]:
+        reply_text = state["reply_queue"].pop(0)
+        preview = reply_text[:200] + ("..." if len(reply_text) > 200 else "")
+        chatbot.display(f"\n[Auto-loaded customer reply from file]\n{preview}")
+    else:
+        reply_text = chatbot.ask("\nPlease type the customer's reply (or press Enter to skip): ")
+
     skipped = True
     if reply_text.strip():
         parser.handle_reply(claim, reply_text, client, state["field_schemas"])
@@ -235,10 +263,11 @@ def node_accept_reply(state: ClaimState) -> ClaimState:
 
 
 def _route_after_validate(state: ClaimState) -> str:
-    status = state["claim"].status
-    if status in ("incomplete", "needs_review"):
-        return "generate_message"
-    return END
+    if state["claim"].status != "incomplete":
+        return END
+    if state["reply_queue"]:
+        return "accept_reply"  # customer already replied — process it before sending anything
+    return "generate_message"
 
 
 def _route_after_reply(state: ClaimState) -> str:
@@ -303,7 +332,7 @@ class ClaimAgent:
         graph.add_conditional_edges(
             "cross_validate",
             _route_after_validate,
-            {"generate_message": "generate_message", END: END},
+            {"generate_message": "generate_message", "accept_reply": "accept_reply", END: END},
         )
         graph.add_edge("generate_message", "accept_reply")
         graph.add_conditional_edges(
@@ -325,8 +354,8 @@ class ClaimAgent:
         cache_path = folder / ".cache" / "claim_state.json"
         if use_cache and cache_path.exists():
             cached = Claim.model_validate_json(cache_path.read_text())
-            if cached.status == "complete":
-                self.chatbot.display(f"  [cache] {claim_id} is complete — loaded from cache.")
+            if cached.status in ("complete", "needs_review"):
+                self.chatbot.display(f"  [cache] {claim_id} ({cached.status}) — loaded from cache.")
                 return cached
             self.chatbot.display(
                 f"  [cache] {claim_id} has status '{cached.status}' — re-processing."
@@ -348,6 +377,7 @@ class ClaimAgent:
             "message_config": self.message_config,
             "parser": ClaimParser(),
             "reply_skipped": False,
+            "reply_queue": [],
         }
 
         final_state = self._graph.invoke(initial_state)

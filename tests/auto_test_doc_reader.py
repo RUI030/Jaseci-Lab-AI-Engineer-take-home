@@ -159,7 +159,7 @@ def test_text_reader_wraps_xml(tmp_path):
     txt_file.write_text("Hello, my loan balance is $5000.")
 
     mock_client = MagicMock()
-    mock_client.generate.return_value = {"doc_type": "customer_reply", "fields": []}
+    mock_client.generate.return_value = {"doc_type": "unknown", "fields": []}
 
     TextReader().read(str(txt_file), FIELD_SCHEMAS, mock_client)
 
@@ -220,6 +220,92 @@ def test_pdf_reader_parse_failed(tmp_path):
         record = PDFReader().read(str(pdf_file), FIELD_SCHEMAS, mock_client)
 
     assert record.parse_status == "parse_failed"
+
+
+# --- Post-hoc doc type override ---
+
+def test_pdf_reader_overrides_misclassified_doc_type(tmp_path):
+    """VLM classifies as named type but extracts zero confident fields → override to unknown."""
+    pdf_file = tmp_path / "tow_receipt.pdf"
+    pdf_file.write_bytes(b"%PDF fake")
+
+    mock_client = MagicMock()
+    mock_client.generate.return_value = {
+        "doc_type": "settlement_breakdown",  # VLM misclassifies tow receipt
+        "fields": [
+            {
+                "field_name": "VIN",
+                "origin_value": None,
+                "unified_value": None,
+                "valid": False,
+                "validation_note": None,
+                "confidence": "low",
+                "confidence_note": None,
+            }
+        ],
+    }
+
+    with patch("pdfplumber.open") as mock_plumber:
+        mock_pdf = MagicMock()
+        mock_pdf.__enter__ = MagicMock(return_value=mock_pdf)
+        mock_pdf.__exit__ = MagicMock(return_value=False)
+        mock_pdf.pages = [MagicMock(extract_text=MagicMock(return_value="A" * 500))]
+        mock_plumber.return_value = mock_pdf
+
+        record = PDFReader().read(str(pdf_file), FIELD_SCHEMAS, mock_client)
+
+    assert record.doc_type == "unknown"
+    assert record.status_reason is not None
+    assert "overridden" in record.status_reason.lower()
+
+
+def test_pdf_reader_keeps_classified_type_when_confident_field_present(tmp_path):
+    """VLM classifies correctly and extracts at least one confident field → keep type."""
+    pdf_file = tmp_path / "report.pdf"
+    pdf_file.write_bytes(b"%PDF fake")
+
+    mock_client = MagicMock()
+    mock_client.generate.return_value = MOCK_RESPONSE  # has high-confidence VIN
+
+    with patch("pdfplumber.open") as mock_plumber:
+        mock_pdf = MagicMock()
+        mock_pdf.__enter__ = MagicMock(return_value=mock_pdf)
+        mock_pdf.__exit__ = MagicMock(return_value=False)
+        mock_pdf.pages = [MagicMock(extract_text=MagicMock(return_value="A" * 500))]
+        mock_plumber.return_value = mock_pdf
+
+        record = PDFReader().read(str(pdf_file), FIELD_SCHEMAS, mock_client)
+
+    assert record.doc_type == "police_report"
+    assert record.status_reason is None
+
+
+def test_image_reader_overrides_misclassified_doc_type(tmp_path):
+    """ImageReader also applies the post-hoc override when no confident fields extracted."""
+    img_file = tmp_path / "receipt.png"
+    img_file.write_bytes(b"fake png")
+
+    mock_client = MagicMock()
+    mock_client.generate.return_value = {
+        "doc_type": "police_report",
+        "fields": [
+            {
+                "field_name": "VIN",
+                "origin_value": None,
+                "unified_value": None,
+                "valid": False,
+                "validation_note": None,
+                "confidence": "low",
+                "confidence_note": None,
+            }
+        ],
+    }
+
+    with patch.object(ImageReader, "preprocess", return_value=str(img_file)):
+        record = ImageReader().read(str(img_file), FIELD_SCHEMAS, mock_client)
+
+    assert record.doc_type == "unknown"
+    assert record.status_reason is not None
 
 
 # --- ImageReader confidence cap ---

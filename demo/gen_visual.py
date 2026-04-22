@@ -189,12 +189,26 @@ def _render_claim(claim: Claim) -> str:
       <strong>Decision:</strong> {_badge(claim.status.upper(), sv)} — {decision}
     </div>""")
 
-    # outbound messages
-    outbound = [c for c in claim.conversation_log if c.direction == "outbound"]
-    if outbound:
-        p.append(f'<h6 class="mt-3">Customer Message(s) Sent ({len(outbound)})</h6>')
-        for msg in outbound:
-            p.append(f'<pre class="bg-light border rounded p-2 small">{_e(msg.message)}</pre>')
+    # full conversation log (outbound + inbound)
+    if claim.conversation_log:
+        p.append(f'<h6 class="mt-3">Conversation Log ({len(claim.conversation_log)} round(s))</h6>')
+        for cr in claim.conversation_log:
+            if cr.direction == "outbound":
+                label = "→ Agent → Customer"
+                bg = "bg-light"
+                border = "border-primary"
+                label_cls = "text-primary"
+            else:
+                label = "← Customer → Agent"
+                bg = "bg-white"
+                border = "border-success"
+                label_cls = "text-success"
+            p.append(
+                f'<div class="border-start border-3 {border} ps-2 mb-2">'
+                f'<small class="{label_cls} fw-semibold">{label}</small>'
+                f'<pre class="{bg} border rounded p-2 small mt-1 mb-0">{_e(cr.message)}</pre>'
+                f'</div>'
+            )
 
     # tools used
     if claim.tools_used:

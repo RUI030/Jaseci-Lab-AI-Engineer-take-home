@@ -241,6 +241,112 @@ def test_determine_status_complete():
     assert parser.determine_status(claim) == "complete"
 
 
+# --- resolve_multiple_versions ---
+
+def _make_numeric_field(field_name, value, confidence="high") -> ExtractedField:
+    return ExtractedField(
+        field_name=field_name,
+        field_role="optional",
+        source_trust="document",
+        unified_value=value,
+        data_type="number",
+        valid=True,
+        confidence=confidence,
+    )
+
+
+def test_resolve_multiple_versions_compatible_adds_warning():
+    """Two versions with numeric fields within tolerance → warning issue only."""
+    auth = _make_doc(
+        "settlement_breakdown.pdf", "settlement_breakdown",
+        fields=[_make_numeric_field("insurance_payout", "10000")],
+    )
+    dup = _make_doc(
+        "settlement_breakdown_v2.pdf", "settlement_breakdown",
+        doc_status="duplicate", duplicate_type="multiple_versions",
+        fields=[_make_numeric_field("insurance_payout", "10050")],  # 0.5% diff — within threshold
+    )
+    claim = _make_claim(doc_table=[auth, dup])
+    parser.resolve_multiple_versions(claim)
+
+    issues = claim.validation_issues
+    assert len(issues) == 1
+    assert issues[0].severity == "warning"
+    assert "compatible" in issues[0].description.lower()
+
+
+def test_resolve_multiple_versions_incompatible_adds_blocking():
+    """Two versions with significantly different numeric fields → blocking issue."""
+    auth = _make_doc(
+        "settlement_breakdown.pdf", "settlement_breakdown",
+        fields=[_make_numeric_field("insurance_payout", "10000")],
+    )
+    dup = _make_doc(
+        "settlement_breakdown_v2.pdf", "settlement_breakdown",
+        doc_status="duplicate", duplicate_type="multiple_versions",
+        fields=[_make_numeric_field("insurance_payout", "50000")],  # 400% diff — blocking
+    )
+    claim = _make_claim(doc_table=[auth, dup])
+    parser.resolve_multiple_versions(claim)
+
+    issues = claim.validation_issues
+    assert len(issues) == 1
+    assert issues[0].severity == "blocking"
+    assert "insurance_payout" in issues[0].description
+
+
+def test_resolve_multiple_versions_picks_newer_by_version_number():
+    """_v2 in filename should be identified as the newer version."""
+    auth = _make_doc("settlement_breakdown.pdf", "settlement_breakdown")
+    dup = _make_doc(
+        "settlement_breakdown_v2.pdf", "settlement_breakdown",
+        doc_status="duplicate", duplicate_type="multiple_versions",
+    )
+    claim = _make_claim(doc_table=[auth, dup])
+    parser.resolve_multiple_versions(claim)
+
+    assert len(claim.validation_issues) == 1
+    assert "settlement_breakdown_v2.pdf" in claim.validation_issues[0].description
+
+
+def test_determine_status_multiple_versions_alone_does_not_force_needs_review():
+    """multiple_versions duplicate without a blocking issue should not route to needs_review."""
+    claim = _make_claim(
+        doc_table=[
+            _make_doc("settlement_breakdown.pdf", "settlement_breakdown"),
+            _make_doc(
+                "settlement_breakdown_v2.pdf", "settlement_breakdown",
+                doc_status="duplicate", duplicate_type="multiple_versions",
+            ),
+        ]
+    )
+    # No blocking validation issues added — compatible versions scenario
+    status = parser.determine_status(claim)
+    assert status != "needs_review"
+
+
+def test_determine_status_multiple_versions_with_blocking_issue_is_needs_review():
+    """multiple_versions duplicate WITH a blocking issue should route to needs_review."""
+    claim = _make_claim(
+        doc_table=[
+            _make_doc("settlement_breakdown.pdf", "settlement_breakdown"),
+            _make_doc(
+                "settlement_breakdown_v2.pdf", "settlement_breakdown",
+                doc_status="duplicate", duplicate_type="multiple_versions",
+            ),
+        ],
+        validation_issues=[
+            ValidationIssue(
+                issue_type="inconsistency",
+                severity="blocking",
+                description="Fields differ significantly.",
+                resolved=False,
+            )
+        ],
+    )
+    assert parser.determine_status(claim) == "needs_review"
+
+
 # --- compare_fields ---
 
 def test_compare_fields_consistent():

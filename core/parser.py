@@ -19,6 +19,30 @@ _CONF_WEIGHT: dict[str, int] = {"high": 3, "medium": 2, "low": 1}
 _VIN_PATTERN = r"^[A-Z0-9]{17}$"   # standard 17-char alphanumeric VIN (case-insensitive)
 _MONEY_PCT_THRESHOLD = 10.0         # percentage difference above which money values are "significant"
 
+_VERSION_RE = re.compile(r"_v(\d+)", re.IGNORECASE)
+_NEWER_KEYWORDS = {"final", "revised", "updated", "latest", "new"}
+
+
+def _pick_newer_version(name_a: str, name_b: str) -> str:
+    """Return whichever filename appears to be the newer version.
+
+    Preference order: explicit _vN suffix (higher N wins) → keyword hints
+    (final/revised/updated/latest/new) → fall back to name_a (first-processed).
+    """
+    ma = _VERSION_RE.search(name_a)
+    mb = _VERSION_RE.search(name_b)
+    if ma and mb:
+        return name_a if int(ma.group(1)) >= int(mb.group(1)) else name_b
+    if mb:
+        return name_b
+    if ma:
+        return name_a
+    has_a = any(kw in name_a.lower() for kw in _NEWER_KEYWORDS)
+    has_b = any(kw in name_b.lower() for kw in _NEWER_KEYWORDS)
+    if has_b and not has_a:
+        return name_b
+    return name_a
+
 
 def _pct_diff(a: str, b: str) -> float:
     """Percentage difference between two numeric strings relative to the larger value."""
@@ -263,9 +287,11 @@ class ClaimParser:
         ):
             return "incomplete"
 
-        # 3. Same-content duplicate or multiple versions of the same doc type — human judgment needed
+        # 3. Same-content duplicate — data-integrity anomaly, human judgment needed.
+        # Note: multiple_versions is handled by resolve_multiple_versions() which adds a
+        # blocking or warning ValidationIssue; blocking falls into rule 4, warning does not block.
         if any(
-            r.doc_status == "duplicate" and r.duplicate_type in ("same_content", "multiple_versions")
+            r.doc_status == "duplicate" and r.duplicate_type == "same_content"
             for r in claim.doc_table
         ):
             return "needs_review"
@@ -439,6 +465,75 @@ class ClaimParser:
         self.record_reply(claim, reply_text, compare_results)
         claim.status = self.determine_status(claim)
         return claim
+
+    def resolve_multiple_versions(self, claim: Claim) -> None:
+        """Compare field values between multiple-version doc pairs; add ValidationIssues.
+
+        Called after node_parse_documents marks duplicates. For each pair:
+        - Compatible fields (identical or numeric diff ≤ threshold): warning issue only —
+          claim can still reach 'complete'.
+        - Significant field differences: blocking issue → 'needs_review' via rule 4.
+        """
+        authoritative: dict[str, DocRecord] = {
+            r.doc_type: r
+            for r in claim.doc_table
+            if r.doc_status == "present" and r.doc_type != "unknown"
+        }
+        for r in claim.doc_table:
+            if r.doc_status != "duplicate" or r.duplicate_type != "multiple_versions":
+                continue
+            auth = authoritative.get(r.doc_type)
+            if auth is None:
+                continue
+
+            auth_fields = {f.field_name: f for f in auth.fields if f.unified_value is not None}
+            dup_fields = {f.field_name: f for f in r.fields if f.unified_value is not None}
+            common = set(auth_fields) & set(dup_fields)
+
+            incompatible: list[str] = []
+            for fname in common:
+                af = auth_fields[fname]
+                df = dup_fields[fname]
+                if af.data_type == "number":
+                    if _pct_diff(af.unified_value, df.unified_value) > _MONEY_PCT_THRESHOLD:
+                        incompatible.append(fname)
+                else:
+                    if af.unified_value != df.unified_value:
+                        incompatible.append(fname)
+
+            newer = _pick_newer_version(auth.file_name, r.file_name)
+
+            if incompatible:
+                claim.validation_issues.append(ValidationIssue(
+                    issue_type="inconsistency",
+                    severity="blocking",
+                    description=(
+                        f"Multiple versions of '{r.doc_type}' found: "
+                        f"'{auth.file_name}' vs '{r.file_name}'. "
+                        f"Significant field differences: {', '.join(incompatible)}. "
+                        f"Likely newer version: '{newer}'."
+                    ),
+                    sources=[auth.file_name, r.file_name],
+                    values={
+                        fname: (
+                            f"{auth_fields[fname].unified_value} vs "
+                            f"{dup_fields[fname].unified_value}"
+                        )
+                        for fname in incompatible
+                    },
+                ))
+            else:
+                claim.validation_issues.append(ValidationIssue(
+                    issue_type="inconsistency",
+                    severity="warning",
+                    description=(
+                        f"Multiple versions of '{r.doc_type}' found: "
+                        f"'{auth.file_name}' vs '{r.file_name}'. "
+                        f"Fields are compatible; '{newer}' treated as authoritative."
+                    ),
+                    sources=[auth.file_name, r.file_name],
+                    values={},
+                ))
 
     def build_customer_message(self, claim: Claim, message_config: dict) -> str:
         """Assemble a single unified email from individual issue fragments."""

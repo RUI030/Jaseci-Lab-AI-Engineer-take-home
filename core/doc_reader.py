@@ -50,7 +50,6 @@ class _ExtractionResponse(BaseModel):
         "police_report",
         "finance_agreement",
         "settlement_breakdown",
-        "customer_reply",
         "unknown",
     ]
 
@@ -64,12 +63,15 @@ _DOC_ROLE = {
 }
 
 
-_DOC_TYPE_DESCRIPTIONS = """Valid doc_type values — choose the best match:
-  - police_report       : official law enforcement accident or incident report
-  - finance_agreement   : vehicle purchase contract or loan / financing agreement
-  - settlement_breakdown: insurance settlement statement or payout calculation
-  - customer_reply      : correspondence or message from the claimant / customer
-  - unknown             : anything that does not clearly match the above"""
+_DOC_TYPE_DESCRIPTIONS = """Valid doc_type values — only assign a specific type when you are confident the document clearly matches its definition. When in doubt, choose 'unknown'.
+  - police_report       : official law enforcement accident or incident report.
+                          NOT a repair estimate, medical bill, tow receipt, court filing, or insurance form.
+  - finance_agreement   : vehicle purchase contract, loan agreement, or financing contract.
+                          NOT an insurance policy, settlement offer, repair quote, or payment receipt.
+  - settlement_breakdown: insurance settlement statement or payout calculation from an insurer.
+                          NOT a repair invoice, tow receipt, medical bill, court order, or general letter.
+  - unknown             : use this for receipts, repair estimates, medical bills, photos, tow invoices,
+                          court documents, supplemental forms, or any document where you are not confident."""
 
 
 def _build_prompt(
@@ -104,6 +106,31 @@ def _build_prompt(
         "  - Provide a confidence_note or validation_note when the value is not high or not valid.\n"
         "Return ONLY valid JSON matching the required schema."
     )
+
+
+def _override_doc_type_if_unconfident(
+    doc_type: str,
+    fields: list[ExtractedField],
+) -> tuple[str, str | None]:
+    """Return (doc_type, status_reason).
+
+    If the VLM assigned a named type but no field was extracted at medium+
+    confidence with a valid, non-null value, the classification is likely wrong.
+    Override to 'unknown' so the claim routes to needs_review rather than silently
+    treating a misclassified supplementary doc as a required document.
+    """
+    if doc_type == "unknown":
+        return doc_type, None
+    confident = [
+        f for f in fields
+        if f.confidence in ("high", "medium") and f.valid and f.unified_value is not None
+    ]
+    if not confident:
+        return "unknown", (
+            f"Doc type overridden to 'unknown': classified as '{doc_type}' but no field "
+            "extracted at medium+ confidence, suggesting possible misclassification."
+        )
+    return doc_type, None
 
 
 def _check_pattern(
@@ -273,6 +300,7 @@ class PDFReader(BaseDocReader):
 
         fields = _response_to_extracted_fields(response, "document", schemas)
         doc_type = response.get("doc_type", "unknown")
+        doc_type, override_reason = _override_doc_type_if_unconfident(doc_type, fields)
         return DocRecord(
             file_name=Path(file_path).name,
             doc_type=doc_type,
@@ -282,6 +310,7 @@ class PDFReader(BaseDocReader):
             content_hash=content_hash,
             raw_text=text,
             fields=fields,
+            status_reason=override_reason,
         )
 
 
@@ -352,6 +381,7 @@ class ImageReader(BaseDocReader):
                 ).strip()
 
         doc_type = response.get("doc_type", "unknown")
+        doc_type, override_reason = _override_doc_type_if_unconfident(doc_type, fields)
         return DocRecord(
             file_name=Path(file_path).name,
             doc_type=doc_type,
@@ -360,6 +390,7 @@ class ImageReader(BaseDocReader):
             parse_status=parse_status,
             content_hash=content_hash,
             fields=fields,
+            status_reason=override_reason,
         )
 
 
@@ -421,6 +452,7 @@ class TextReader(BaseDocReader):
 
         fields = _response_to_extracted_fields(response, "document", schemas)
         doc_type = response.get("doc_type", "unknown")
+        doc_type, override_reason = _override_doc_type_if_unconfident(doc_type, fields)
         return DocRecord(
             file_name=Path(file_path).name,
             doc_type=doc_type,
@@ -430,6 +462,7 @@ class TextReader(BaseDocReader):
             content_hash=content_hash,
             raw_text=content,
             fields=fields,
+            status_reason=override_reason,
         )
 
 
