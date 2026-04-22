@@ -9,6 +9,7 @@ from typing_extensions import TypedDict
 
 from core.chatbot import Chatbot
 from core.doc_reader import get_doc_reader, _hash_file
+from core.tools import classify_document
 from core.llm_adapters import BaseLLMClient, LLMClientFactory
 from core.models import (
     Claim,
@@ -51,7 +52,7 @@ def node_parse_documents(state: ClaimState) -> ClaimState:
     seen_hashes: dict[str, str] = {}  # hash -> file_name
     seen_names: dict[str, str] = {}   # name -> file_path
 
-    # H2: track required types that were attempted but may have failed to parse,
+    # Track required types that were attempted but may have failed to parse,
     # so the missing-placeholder loop does not double-count them as "missing".
     attempted_required_types: set[str] = set()
 
@@ -100,13 +101,14 @@ def node_parse_documents(state: ClaimState) -> ClaimState:
         if content_hash:
             seen_hashes[content_hash] = file_name
 
-        # --- read the document ---
+        # --- classify and read the document ---
+        claim.tools_used.append(classify_document(file_name))
         try:
             reader = get_doc_reader(str(file_path))
             record = reader.read(str(file_path), schemas, client)
             if record.doc_type in REQUIRED_DOC_TYPES:
                 attempted_required_types.add(record.doc_type)
-        except Exception as exc:  # L4: ValueError ⊂ Exception, single catch is enough
+        except Exception as exc:
             # Use filename to infer intended required type before discarding it
             for req_type in REQUIRED_DOC_TYPES:
                 if req_type in file_name.lower().replace("-", "_"):
@@ -124,7 +126,7 @@ def node_parse_documents(state: ClaimState) -> ClaimState:
         claim.doc_table.append(record)
 
     # --- merge extracted_fields (highest confidence wins per field) ---
-    confidence_rank = {"high": 3, "medium": 2, "low": 1}  # L16: lowercase local var
+    confidence_rank = {"high": 3, "medium": 2, "low": 1}
     for record in claim.doc_table:
         for field in record.fields:
             existing = claim.extracted_fields.get(field.field_name)
@@ -135,8 +137,29 @@ def node_parse_documents(state: ClaimState) -> ClaimState:
             ):
                 claim.extracted_fields[field.field_name] = field
 
+    # --- multiple_versions: flag later-processed docs when same doc_type appears more than once ---
+    from collections import Counter
+    type_counts = Counter(
+        r.doc_type for r in claim.doc_table
+        if r.doc_status == "present" and r.doc_type != "unknown"
+    )
+    for doc_type, count in type_counts.items():
+        if count > 1:
+            matching = [
+                r for r in claim.doc_table
+                if r.doc_type == doc_type and r.doc_status == "present"
+            ]
+            authoritative = matching[0].file_name
+            for r in matching[1:]:
+                r.doc_status = "duplicate"
+                r.duplicate_type = "multiple_versions"
+                r.status_reason = (
+                    f"Multiple '{doc_type}' documents found; "
+                    f"'{authoritative}' treated as authoritative."
+                )
+
     # --- placeholder DocRecords for missing required docs ---
-    # H2: only mark as missing if the type was neither successfully parsed
+    # Only mark as missing if the type was neither successfully parsed
     # nor attempted (attempted-but-parse_failed is handled by rule #6).
     present_types = {
         r.doc_type for r in claim.doc_table
@@ -166,72 +189,13 @@ def node_cross_validate(state: ClaimState) -> ClaimState:
     return state
 
 
-def _build_customer_message(claim: Claim, message_config: dict) -> str:
-    """Assemble a single unified email from individual issue fragments."""
-    fragments = message_config.get("issue_fragments")
-    if not fragments:
-        raise KeyError("messages.yaml is missing required 'issue_fragments' section")
-    email_tmpl = message_config.get("customer_email")
-    if not email_tmpl:
-        raise KeyError("messages.yaml is missing required 'customer_email' template")
-
-    issue_lines: list[str] = []
-
-    missing_docs = [r.doc_type for r in claim.doc_table if r.doc_status == "missing"]
-    if missing_docs:
-        issue_lines.append(
-            fragments["missing_document"].format(
-                missing_docs=", ".join(missing_docs)
-            ).strip()
-        )
-
-    parse_failed_docs = [r.file_name for r in claim.doc_table if r.parse_status == "parse_failed"]
-    if parse_failed_docs:
-        issue_lines.append(
-            fragments["parse_failed"].format(
-                failed_docs=", ".join(parse_failed_docs)
-            ).strip()
-        )
-
-    for vi in claim.validation_issues:
-        if vi.issue_type != "inconsistency" or vi.resolved:
-            continue
-        if vi.severity == "blocking":
-            if vi.resubmit_doc:
-                issue_lines.append(
-                    fragments["resubmit_document"].format(
-                        field_name=vi.field_name or "unknown field",
-                        resubmit_doc=vi.resubmit_doc,
-                    ).strip()
-                )
-            else:
-                details = "\n".join(f"  - {k}: {v}" for k, v in vi.values.items())
-                issue_lines.append(
-                    fragments["field_inconsistency"].format(
-                        field_name=vi.field_name or "unknown field",
-                        inconsistency_details=details,
-                    ).strip()
-                )
-        else:
-            issue_lines.append(
-                fragments["field_inconsistency_warning"].format(
-                    field_name=vi.field_name or "unknown field",
-                ).strip()
-            )
-
-    if claim.status == "pending" and not issue_lines:
-        issue_lines.append(fragments["pending_review"].strip())
-
-    issues_body = "\n\n".join(f"{i + 1}. {line}" for i, line in enumerate(issue_lines))
-    return email_tmpl.format(claim_id=claim.claim_id, issues_body=issues_body).strip()
-
-
 def node_generate_message(state: ClaimState) -> ClaimState:
     claim = state["claim"]
     chatbot: Chatbot = state["chatbot"]
     message_config: dict = state["message_config"]
+    parser: ClaimParser = state["parser"]
 
-    message = _build_customer_message(claim, message_config)
+    message = parser.build_customer_message(claim, message_config)
     chatbot.display(f"\n[Message to customer]\n{message}")
 
     claim.conversation_log.append(
@@ -264,7 +228,7 @@ def node_accept_reply(state: ClaimState) -> ClaimState:
             for vi in claim.validation_issues
         )
         if has_resubmit:
-            claim.status = "pending"
+            claim.status = "needs_review"
 
     state["reply_skipped"] = skipped
     return state
@@ -272,7 +236,7 @@ def node_accept_reply(state: ClaimState) -> ClaimState:
 
 def _route_after_validate(state: ClaimState) -> str:
     status = state["claim"].status
-    if status in ("incomplete", "pending"):
+    if status in ("incomplete", "needs_review"):
         return "generate_message"
     return END
 
@@ -307,11 +271,11 @@ def _priority_key(claim: Claim) -> int:
     """Return sort key for prioritize_claims (lower = higher priority)."""
     if claim.status == "complete":
         return 0
+    if claim.status == "needs_review":
+        return 1  # human must act — staff can do something now
     if claim.status == "incomplete" and _is_express_eligible(claim):
-        return 1
-    if claim.status == "incomplete":
-        return 2
-    return 3  # pending
+        return 2  # waiting on customer, but nearly resolved
+    return 3  # incomplete — waiting on customer, nothing staff can do yet
 
 
 class ClaimAgent:
@@ -402,7 +366,7 @@ class ClaimAgent:
         """Sort claims by status priority then upload time; assign express flag.
 
         Priority groups (lowest number = highest priority):
-          0 complete → 1 incomplete-express → 2 incomplete-standard → 3 pending
+          0 complete → 1 needs_review → 2 incomplete-express → 3 incomplete-standard
         Within each group, oldest upload_at wins.
         """
         priority_reasons = self.message_config.get("priority_reason", {})
@@ -417,20 +381,20 @@ class ClaimAgent:
                     "complete_oldest",
                     "All documents present and valid — ready to finalize.",
                 )
+            elif claim.status == "needs_review":
+                reason = priority_reasons.get(
+                    "pending_oldest",
+                    "Requires human review.",
+                )
             elif express:
                 reason = priority_reasons.get(
                     "incomplete_express",
                     "Express routing — fewer than 2 unresolved issues.",
                 )
-            elif claim.status == "incomplete":
+            else:  # incomplete standard
                 reason = priority_reasons.get(
                     "incomplete_standard",
                     "Incomplete claim — customer notification required.",
-                )
-            else:
-                reason = priority_reasons.get(
-                    "pending_oldest",
-                    "Requires human review.",
                 )
             records.append(
                 PriorityRecord(

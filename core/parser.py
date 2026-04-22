@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import os
 import re
-import tempfile
 from datetime import datetime, timezone
 from typing import Literal
 
@@ -15,6 +13,7 @@ from core.models import (
     FieldSchema,
     ValidationIssue,
 )
+from core.tools import check_field_consistency, validate_vin
 
 _CONF_WEIGHT: dict[str, int] = {"high": 3, "medium": 2, "low": 1}
 _VIN_PATTERN = r"^[A-Z0-9]{17}$"   # standard 17-char alphanumeric VIN (case-insensitive)
@@ -88,6 +87,9 @@ class ClaimParser:
             if already:
                 continue
 
+            # Log tool calls for this multi-source field
+            claim.tools_used.append(check_field_consistency(field_name, values_only))
+
             # --- weighted voting ---
             weighted: dict[str, int] = {}
             for _, (val, conf, _) in source_map.items():
@@ -119,6 +121,9 @@ class ClaimParser:
                 resubmit_doc = None
 
                 if data_type == "string" and "vin" in field_name.lower():
+                    # Validate each unique VIN value and log the results
+                    for vin_val in {v for _, (v, _, _) in source_map.items()}:
+                        claim.tools_used.append(validate_vin(vin_val))
                     # Regex validity is a stronger signal than confidence weights for VINs.
                     # Filter to sources whose value passes the VIN format check first;
                     # then weighted-vote among those. If none pass, block.
@@ -238,73 +243,69 @@ class ClaimParser:
 
     def determine_status(
         self, claim: Claim
-    ) -> Literal["complete", "incomplete", "pending"]:
+    ) -> Literal["complete", "incomplete", "needs_review"]:
         """Evaluate doc_table and validation_issues to assign claim status.
 
         Priority order matches ARCHITECTURE.md status aggregation logic.
+        Two-criterion split:
+          incomplete   = customer must act (missing doc, same-filename duplicate)
+          needs_review = human must act (everything else wrong)
+          complete     = nothing wrong
         """
-        # 1. Missing required document
+        # 1. Missing required document — customer can fix
         if any(r.doc_status == "missing" for r in claim.doc_table):
             return "incomplete"
 
-        # 2. same_filename duplicate
+        # 2. Same-filename duplicate — customer can fix by resubmitting
         if any(
             r.doc_status == "duplicate" and r.duplicate_type == "same_filename"
             for r in claim.doc_table
         ):
             return "incomplete"
 
-        # 3. same_content duplicate
+        # 3. Same-content duplicate or multiple versions of the same doc type — human judgment needed
         if any(
-            r.doc_status == "duplicate" and r.duplicate_type == "same_content"
+            r.doc_status == "duplicate" and r.duplicate_type in ("same_content", "multiple_versions")
             for r in claim.doc_table
         ):
-            return "pending"
+            return "needs_review"
 
-        # Single pass over validation_issues for all unresolved types
-        blocking_inconsistencies = []
-        low_conf_issues = []
-        for vi in claim.validation_issues:
-            if vi.resolved:
-                continue
-            if vi.issue_type == "inconsistency" and vi.severity == "blocking":
-                blocking_inconsistencies.append(vi)
-            elif vi.issue_type == "low_confidence":
-                low_conf_issues.append(vi)
-        # Warning-severity inconsistencies are logged for staff review but do not
-        # affect routing — only blocking ones change the claim status.
-
-        # 4/5. Blocking inconsistency — incomplete before first reply, pending after
+        # 4. Unresolved blocking inconsistency
+        # Warning-severity inconsistencies are logged for staff but do not affect routing.
+        blocking_inconsistencies = [
+            vi for vi in claim.validation_issues
+            if not vi.resolved and vi.issue_type == "inconsistency" and vi.severity == "blocking"
+        ]
         if blocking_inconsistencies:
-            return "pending" if claim.reply_count > 0 else "incomplete"
+            return "needs_review"
 
-        # 6. Parse failed
+        # 5. Parse failed
         if any(r.parse_status == "parse_failed" for r in claim.doc_table):
-            return "pending"
+            return "needs_review"
 
-        # 7. Unknown doc type
+        # 6. Unknown doc type
         if any(r.doc_type == "unknown" for r in claim.doc_table):
-            return "pending"
+            return "needs_review"
 
-        # 8. Unresolved low-confidence required field
+        # 7. Unresolved low-confidence required field
+        low_conf_issues = [
+            vi for vi in claim.validation_issues
+            if not vi.resolved and vi.issue_type == "low_confidence"
+        ]
         if low_conf_issues:
-            return "pending"
-
-        # Also check extracted_fields directly for low-confidence required fields
+            return "needs_review"
         for field in claim.extracted_fields.values():
             if field.field_role == "required" and field.confidence == "low":
-                return "pending"
+                return "needs_review"
 
-        # 9. Defensive check for required docs absent from doc_table entirely.
-        # D5: Step 1 already catches doc_status == "missing" placeholders, which
-        # node_parse_documents always inserts for required types not found on disk.
-        # This step only fires if a required type somehow has no record at all
-        # (e.g., if a caller bypassed node_parse_documents). Kept as a safety net.
+        # 8. Defensive check for required docs absent from doc_table entirely.
+        # Step 1 already catches missing-doc placeholders that node_parse_documents inserts.
+        # This only fires if a caller bypassed node_parse_documents entirely — kept as a safety net.
         missing = self.check_required_docs(claim)
         if missing:
             return "incomplete"
 
-        # 10. All required docs present and parsed + all required fields valid
+        # 9. All required docs present and parsed + all required fields valid
         required_complete = all(
             r.parse_status == "complete"
             for r in claim.doc_table
@@ -327,24 +328,8 @@ class ClaimParser:
         schemas: list[FieldSchema],
         client: BaseLLMClient,
     ) -> list[ExtractedField]:
-        """Extract fields from a customer reply; hard-cap source_trust and confidence.
-
-        R1: import os moved to module top.
-        R2: renamed parse_reply → extract_reply_fields (does field extraction, not just parsing).
-        R3: parameter renamed target_fields → schemas.
-        """
-        # R1: os imported at module top
-        tmp_path = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".txt", delete=False, encoding="utf-8"
-            ) as tmp:
-                tmp.write(reply_text)
-                tmp_path = tmp.name
-            record = TextReader().read(tmp_path, schemas, client)
-        finally:
-            if tmp_path and os.path.exists(tmp_path):
-                os.unlink(tmp_path)
+        """Extract fields from a customer reply; hard-cap source_trust and confidence."""
+        record = TextReader().read_text(reply_text, schemas, client)
         fields = record.fields
 
         # Override trust and confidence for all fields from customer replies
@@ -386,10 +371,7 @@ class ClaimParser:
         message: str,
         compare_results: dict[str, Literal["consistent", "inconsistent"]],
     ) -> None:
-        """Append an inbound ConversationRound and increment reply_count.
-
-        R2: renamed log_reply → record_reply ("log" implies a logger; this appends to the conversation list).
-        """
+        """Append an inbound ConversationRound and increment reply_count."""
         claim.reply_count += 1
         claim.conversation_log.append(
             ConversationRound(
@@ -408,10 +390,7 @@ class ClaimParser:
         client: BaseLLMClient,
         schemas: list[FieldSchema],
     ) -> Claim:
-        """Orchestrate reply processing: extract fields → compare → record → determine status.
-
-        R3: parameter renamed field_schemas → schemas for consistency.
-        """
+        """Orchestrate reply processing: extract fields → compare → record → determine status."""
         unresolved_fields = {
             vi.field_name
             for vi in claim.validation_issues
@@ -460,3 +439,62 @@ class ClaimParser:
         self.record_reply(claim, reply_text, compare_results)
         claim.status = self.determine_status(claim)
         return claim
+
+    def build_customer_message(self, claim: Claim, message_config: dict) -> str:
+        """Assemble a single unified email from individual issue fragments."""
+        fragments = message_config.get("issue_fragments")
+        if not fragments:
+            raise KeyError("messages.yaml is missing required 'issue_fragments' section")
+        email_tmpl = message_config.get("customer_email")
+        if not email_tmpl:
+            raise KeyError("messages.yaml is missing required 'customer_email' template")
+
+        issue_lines: list[str] = []
+
+        missing_docs = [r.doc_type for r in claim.doc_table if r.doc_status == "missing"]
+        if missing_docs:
+            issue_lines.append(
+                fragments["missing_document"].format(
+                    missing_docs=", ".join(missing_docs)
+                ).strip()
+            )
+
+        parse_failed_docs = [r.file_name for r in claim.doc_table if r.parse_status == "parse_failed"]
+        if parse_failed_docs:
+            issue_lines.append(
+                fragments["parse_failed"].format(
+                    failed_docs=", ".join(parse_failed_docs)
+                ).strip()
+            )
+
+        for vi in claim.validation_issues:
+            if vi.issue_type != "inconsistency" or vi.resolved:
+                continue
+            if vi.severity == "blocking":
+                if vi.resubmit_doc:
+                    issue_lines.append(
+                        fragments["resubmit_document"].format(
+                            field_name=vi.field_name or "unknown field",
+                            resubmit_doc=vi.resubmit_doc,
+                        ).strip()
+                    )
+                else:
+                    details = "\n".join(f"  - {k}: {v}" for k, v in vi.values.items())
+                    issue_lines.append(
+                        fragments["field_inconsistency"].format(
+                            field_name=vi.field_name or "unknown field",
+                            inconsistency_details=details,
+                        ).strip()
+                    )
+            else:
+                issue_lines.append(
+                    fragments["field_inconsistency_warning"].format(
+                        field_name=vi.field_name or "unknown field",
+                    ).strip()
+                )
+
+        if claim.status == "needs_review" and not issue_lines:
+            issue_lines.append(fragments["pending_review"].strip())
+
+        issues_body = "\n\n".join(f"{i + 1}. {line}" for i, line in enumerate(issue_lines))
+        return email_tmpl.format(claim_id=claim.claim_id, issues_body=issues_body).strip()

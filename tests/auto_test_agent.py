@@ -71,7 +71,7 @@ def test_process_claim_returns_claim_with_correct_id(monkeypatch, tmp_path):
         claim = agent.process_claim(str(claim_dir))
 
     assert claim.claim_id == "CLM-999"
-    assert claim.status in ("complete", "incomplete", "pending")
+    assert claim.status in ("complete", "incomplete", "needs_review")
 
 
 def test_process_claim_saves_cache(monkeypatch, tmp_path):
@@ -162,7 +162,7 @@ def test_prioritize_claims_order(monkeypatch):
     agent = _make_agent_with_mock_llm(monkeypatch)
 
     claims = [
-        _make_claim("pending", claim_id="CLM-003", uploaded_at="2024-01-03T00:00:00"),
+        _make_claim("needs_review", claim_id="CLM-003", uploaded_at="2024-01-03T00:00:00"),
         _make_claim("complete", claim_id="CLM-001", uploaded_at="2024-01-01T00:00:00"),
         _make_claim("incomplete", claim_id="CLM-002", uploaded_at="2024-01-02T00:00:00"),
     ]
@@ -170,7 +170,8 @@ def test_prioritize_claims_order(monkeypatch):
 
     assert records[0].claim_id == "CLM-001"  # complete first
     assert records[0].priority_rank == 1
-    assert records[-1].claim_id == "CLM-003"  # pending last
+    assert records[1].claim_id == "CLM-003"  # needs_review second (staff can act)
+    assert records[-1].claim_id == "CLM-002"  # incomplete last (waiting on customer)
     assert records[-1].priority_rank == 3
 
 
@@ -206,8 +207,8 @@ def test_prioritize_claims_oldest_first_within_same_status(monkeypatch):
     agent = _make_agent_with_mock_llm(monkeypatch)
 
     claims = [
-        _make_claim("pending", claim_id="CLM-NEW", uploaded_at="2024-06-01T00:00:00"),
-        _make_claim("pending", claim_id="CLM-OLD", uploaded_at="2024-01-01T00:00:00"),
+        _make_claim("needs_review", claim_id="CLM-NEW", uploaded_at="2024-06-01T00:00:00"),
+        _make_claim("needs_review", claim_id="CLM-OLD", uploaded_at="2024-01-01T00:00:00"),
     ]
     records = agent.prioritize_claims(claims)
     assert records[0].claim_id == "CLM-OLD"

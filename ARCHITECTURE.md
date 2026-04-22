@@ -12,7 +12,7 @@ Chatbot        (core/chatbot.py)      — IO only, no business logic
                     └── LLMAdapters (core/llm_adapters.py) — Gemini / Qwen clients
 ```
 
-Shared utilities (YAML loading, schema loading) live in `core/utils.py`.
+Shared utilities (YAML loading, schema loading) live in `core/utils.py`. Named tool functions (`validate_vin`, `check_field_consistency`, `classify_document`) live in `core/tools.py` and are called conditionally by `ClaimAgent` and `ClaimParser`.
 
 **Entry point assumption:** Input files are assumed to have been uploaded to a local claim folder before processing begins.
 
@@ -54,11 +54,11 @@ class Chatbot:
 
 **LangGraph graph** (`ClaimAgent._build_graph`):
 - Entry → `parse_documents` → `cross_validate`
-- Conditional after `cross_validate`: if status is `incomplete` or `pending` → `generate_message` → `accept_reply`
+- Conditional after `cross_validate`: if status is `incomplete` or `needs_review` → `generate_message` → `accept_reply`
 - Conditional after `accept_reply`: if reply was not skipped and under `max_reply_rounds` → `cross_validate` again; else END
 - Routing is deterministic/conditional, not LLM-driven (compliance requirement — insurance claim processing has well-defined states where unpredictable LLM-driven tool selection would be a liability)
 
-**State:** `ClaimState` is a `TypedDict` holding `claim`, `folder_path`, `field_schemas`, `llm_client`, `chatbot`, `workflow_config`, `message_config`, `parser`, and `reply_skipped`. It is fully serialisable to support future LangGraph checkpointing.
+**State:** `ClaimState` is a `TypedDict` holding `claim`, `folder_path`, `field_schemas`, `llm_client`, `chatbot`, `workflow_config`, `message_config`, `parser`, and `reply_skipped`. Note: `llm_client`, `chatbot`, and `parser` are non-serialisable objects; LangGraph checkpointing is not available without moving these to `ClaimAgent` instance variables.
 
 #### ADT
 
@@ -82,19 +82,19 @@ class ClaimAgent:
 |------|------------------|
 | `parse_documents` | entry point |
 | `cross_validate` | after all documents parsed; also after each accepted reply |
-| `generate_message` | status is `incomplete` or `pending` |
+| `generate_message` | status is `incomplete` or `needs_review` |
 | `accept_reply` | after every outbound customer message |
 
-**Customer message format:** `_build_customer_message` assembles a single unified email from body fragments defined in `config/messages.yaml`. One greeting, numbered issue list, one sign-off — regardless of how many issues are present. Warning-severity inconsistencies get a non-alarming fragment; blocking ones ask the customer to clarify.
+**Customer message format:** `ClaimParser.build_customer_message` assembles a single unified email from body fragments defined in `config/messages.yaml`. One greeting, numbered issue list, one sign-off — regardless of how many issues are present. Warning-severity inconsistencies get a non-alarming fragment; blocking ones ask the customer to clarify.
 
 **Claim prioritisation logic:**
 
 ```
 Primary sort: status
   complete             → highest priority (ready to finalise immediately)
-  incomplete (express) → second (≤1 unresolved issue, no missing docs)
-  incomplete           → third (notify user as early as possible)
-  pending              → last (enters human review queue)
+  needs_review         → second (staff must act — human review queue)
+  incomplete (express) → third (≤1 unresolved issue, no missing docs — nearly resolved)
+  incomplete           → lowest (waiting on customer; staff cannot act yet)
 
 Secondary sort: uploaded_at (oldest first within same status group)
 ```
@@ -129,7 +129,7 @@ class ClaimParser:
 
     def determine_status(
         self, claim: Claim
-    ) -> Literal["complete", "incomplete", "pending"]
+    ) -> Literal["complete", "incomplete", "needs_review"]
     # evaluates doc_table and validation_issues
     # only "blocking" inconsistencies affect routing
 
@@ -160,6 +160,12 @@ class ClaimParser:
         schemas: list[FieldSchema]
     ) -> Claim
     # orchestrator: extract_reply_fields → compare_fields → record_reply → determine_status
+
+    def build_customer_message(
+        self, claim: Claim,
+        message_config: dict
+    ) -> str
+    # assembles a single unified outbound email from issue_fragments in messages.yaml
 ```
 
 **Confidence-aware inconsistency severity:**
@@ -171,7 +177,7 @@ class ClaimParser:
 | Two or more medium/high confidence sources disagree | `blocking` |
 | Only low-confidence sources conflict, or a single low-confidence source disagrees with a high-confidence one | `warning` |
 
-`blocking` inconsistencies affect claim routing. `warning` inconsistencies are logged for staff review but do not push the claim to `incomplete` or `pending`.
+`blocking` inconsistencies affect claim routing. `warning` inconsistencies are logged for staff review but do not push the claim to `incomplete` or `needs_review`.
 
 **Confidence score rules:**
 
@@ -196,7 +202,7 @@ TextReader (XML-isolated, source_trust = "user_input")
     ▼
 compare_fields (unified_value only)
     ├── consistent   → record_reply only
-    └── inconsistent → ValidationIssue added, status → pending
+    └── inconsistent → ValidationIssue added, status → needs_review
 ```
 
 Customer replies **cannot resolve inconsistencies** — even a matching reply does not eliminate a conflict between original documents. This is a deliberate trust model decision.
@@ -295,7 +301,48 @@ class LLMClientFactory:
 
 ---
 
+### 6. Tools
+
+**File:** `core/tools.py`
+
+**Responsibility:** Named, callable tool functions invoked conditionally during processing. Each call is logged to `Claim.tools_used` so the audit trail shows which tools ran and why. No tool modifies claim state directly — callers decide what to do with the result.
+
+```python
+def classify_document(file_name: str) -> dict
+# infers doc type from filename keywords
+# called by node_parse_documents for every file before reading
+
+def validate_vin(vin: str) -> dict
+# checks VIN length and character set
+# called by ClaimParser.cross_validate when a VIN field is present
+
+def check_field_consistency(field_name: str, values: dict[str, str]) -> dict
+# compares values across sources; returns consistent/inconsistent + differing values
+# called by ClaimParser.cross_validate for each multi-source field
+```
+
+Each function returns `{"tool": "<name>", "input": {...}, "result": {...}}` — the same dict appended to `Claim.tools_used`.
+
+---
+
 ## Data Structures
+
+### Claim
+```python
+class Claim(BaseModel):
+    claim_id: str
+    uploaded_at: str                              # ISO 8601
+    status: Literal["complete", "incomplete", "needs_review"]
+    doc_table: list[DocRecord]
+    extracted_fields: dict[str, ExtractedField]  # highest-confidence wins per field
+    validation_issues: list[ValidationIssue]
+    conversation_log: list[ConversationRound]
+    reply_count: int
+    tools_used: list[dict]
+    # each entry: {"tool": "<name>", "input": {...}, "result": {...}}
+```
+
+---
 
 ### FieldSchema
 ```python
@@ -332,10 +379,11 @@ class DocRecord(BaseModel):
     doc_role: Literal["required", "optional", "other"]
     source_trust: Literal["document", "user_input"]
     parse_status: Literal["complete", "parse_failed", "unprocessed"]
-    # "unprocessed" = not yet parsed; distinct from Claim.status "pending"
+    # "unprocessed" = not yet parsed; distinct from Claim.status "needs_review"
     doc_status: Literal["present", "missing", "duplicate"]
-    duplicate_type: Literal["same_filename", "same_content"] | None
-    # same_filename → incomplete; same_content → pending (data integrity concern)
+    duplicate_type: Literal["same_filename", "same_content", "multiple_versions"] | None
+    # same_filename → incomplete (customer-fixable)
+    # same_content / multiple_versions → needs_review (human judgment needed)
     status_reason: str | None
     content_hash: str | None        # SHA-256, used for duplicate detection
     raw_text: str | None
@@ -372,7 +420,7 @@ class ConversationRound(BaseModel):
 ```python
 class PriorityRecord(BaseModel):
     claim_id: str
-    status: Literal["complete", "incomplete", "pending"]
+    status: Literal["complete", "incomplete", "needs_review"]
     uploaded_at: str
     express: bool                   # True if incomplete and unresolved issues < 2 and no missing docs
     priority_rank: int
@@ -399,17 +447,21 @@ A claim cannot reach `complete` status if any required document is missing or ha
 `ClaimParser.determine_status` evaluates in this priority order:
 
 ```
+# incomplete — customer-fixable only
 1. any doc_status == "missing"                                → incomplete
-2. any doc_status == "duplicate" (same_filename)              → incomplete
-3. any doc_status == "duplicate" (same_content)               → pending
-4. any unresolved blocking inconsistency, reply_count == 0    → incomplete
-5. any unresolved blocking inconsistency, reply_count > 0     → pending
+2. any duplicate_type == "same_filename"                      → incomplete
+
+# needs_review — all docs present but human judgment needed
+3. any duplicate_type == "same_content" or "multiple_versions" → needs_review
+4. any unresolved blocking inconsistency                      → needs_review
    (warning-severity inconsistencies do not affect routing)
-6. any parse_status == "parse_failed"                         → pending
-7. any doc_type == "unknown"                                  → pending
-8. any unresolved low_confidence required field               → pending
-9. all required docs present + all required fields valid      → complete
-10. fallback                                                  → incomplete
+5. any parse_status == "parse_failed"                         → needs_review
+6. any doc_type == "unknown"                                  → needs_review
+7. any unresolved low_confidence required field               → needs_review
+
+# complete
+8. all required docs present + all required fields valid      → complete
+9. fallback                                                   → incomplete
 ```
 
 **Status semantics:**
@@ -417,24 +469,24 @@ A claim cannot reach `complete` status if any required document is missing or ha
 | Status | Meaning | Who acts |
 |--------|---------|---------|
 | `complete` | All required docs present, all fields valid, no unresolved blocking issues | Nobody — ready to finalise |
-| `incomplete` | User-side problem; system can tell the user exactly what to fix | Customer |
-| `pending` | Requires human intervention; customer cannot resolve alone | Company staff |
+| `incomplete` | Customer-fixable problem: missing doc or same-filename duplicate | Customer |
+| `needs_review` | All docs present but human judgment required (inconsistency, parse failure, unknown doc type, low confidence) | Company staff |
 
-**Why `pending` over `needs_review`:** `pending` describes ownership — the ball is in the company's court. `needs_review` only describes state. The distinction maps directly to workflow routing.
+**Two-criterion split:** `incomplete` is reserved exclusively for cases the customer can fix themselves. Everything else that blocks completion goes to `needs_review`. This removes the `reply_count` branch from `determine_status` — whether a reply has been received does not change who needs to act.
 
 ---
 
 ## Error Handling
 
-All unrecoverable errors result in `pending` status rather than silent failure. Every error is recorded in `DocRecord.status_reason` or `ValidationIssue.description` for human review.
+All unrecoverable errors result in `needs_review` status rather than silent failure. Every error is recorded in `DocRecord.status_reason` or `ValidationIssue.description` for human review.
 
 | Error | Handling |
 |-------|---------|
-| Transient API error (rate-limit, 5xx) | Exponential backoff, up to `retry.max_attempts` attempts (`llm_adapters._with_retry`). On final failure → `ParseFailedError` → `parse_status = "parse_failed"`, claim → `pending` |
-| VLM returns malformed JSON | `ParseFailedError` raised immediately (not retried) → `parse_status = "parse_failed"`, claim → `pending` |
-| File corrupted or unreadable | `parse_status = "parse_failed"`, claim → `pending`, logged in `status_reason` |
+| Transient API error (rate-limit, 5xx) | Exponential backoff, up to `retry.max_attempts` attempts (`llm_adapters._with_retry`). On final failure → `ParseFailedError` → `parse_status = "parse_failed"`, claim → `needs_review` |
+| VLM returns malformed JSON | `ParseFailedError` raised immediately (not retried) → `parse_status = "parse_failed"`, claim → `needs_review` |
+| File corrupted or unreadable | `parse_status = "parse_failed"`, claim → `needs_review`, logged in `status_reason` |
 | PDF with no text layer | `PDFReader` detects low text volume (below `pdf_text_threshold`) and falls back to `ImageReader` |
-| Unknown doc type | `doc_type = "unknown"`, claim → `pending`, no field extraction attempted |
+| Unknown doc type | `doc_type = "unknown"`, claim → `needs_review`, no field extraction attempted |
 | Unsupported `model_id` | `UnsupportedModelError` raised at `LLMClientFactory.get_client()`, before any processing begins |
 
 ---
@@ -451,19 +503,23 @@ ClaimAgent
     │  calls chatbot.ask() / chatbot.display() as needed
     │
     ├── node_parse_documents
-    │       get_doc_reader() → PDFReader / ImageReader / TextReader
-    │           └── BaseDocReader.read(schemas, llm_client)
-    │                   └── DocRecord (with fields) → stored in Claim.doc_table
-    │               merge extracted_fields into Claim.extracted_fields
-    │               insert missing-doc placeholder DocRecords
+    │       for each file:
+    │           classify_document(file_name) → Claim.tools_used
+    │           get_doc_reader() → PDFReader / ImageReader / TextReader
+    │               └── BaseDocReader.read(schemas, llm_client)
+    │                       └── DocRecord (with fields) → stored in Claim.doc_table
+    │       merge extracted_fields into Claim.extracted_fields
+    │       post-pass: flag multiple_versions duplicates
+    │       insert missing-doc placeholder DocRecords
     │
     ├── node_cross_validate
     │       ClaimParser.cross_validate → list[ValidationIssue] (blocking or warning)
-    │       ClaimParser.determine_status → complete / incomplete / pending
+    │           check_field_consistency / validate_vin → Claim.tools_used
+    │       ClaimParser.determine_status → complete / incomplete / needs_review
     │
-    ├── [if incomplete or pending]
+    ├── [if incomplete or needs_review]
     │       node_generate_message
-    │           _build_customer_message → single unified email (from messages.yaml fragments)
+    │           ClaimParser.build_customer_message → single unified email (from messages.yaml fragments)
     │           → chatbot.display() + ConversationRound appended
     │
     ├── [waiting for customer reply]
@@ -524,11 +580,11 @@ claims/
 
 **Single unified customer email.** All issues (missing docs, parse failures, inconsistencies) are collected and sent as one email per interaction cycle. Individual sections are body fragments in `config/messages.yaml`; the outer wrapper (greeting + sign-off) is a single template. This avoids sending multiple disjointed emails for the same claim in the same round.
 
-**`pending` over `needs_review`.** `pending` describes ownership (company staff must act), not just state. This maps directly to workflow routing.
+**Status enum matches the spec.** `complete | incomplete | needs_review` map directly to who acts next: nobody, the customer, and company staff respectively.
 
-**Duplicate routing is type-aware.** Same-filename duplicates → `incomplete` (trivially resolvable by the user). Same-content duplicates with different filenames → `pending` (potential data integrity concern requiring human review).
+**Duplicate routing is type-aware.** Same-filename duplicates → `incomplete` (trivially resolvable by the user). Same-content duplicates with different filenames, or multiple documents of the same required type → `needs_review` (potential data integrity concern requiring human judgment).
 
-**Express flag is scoped to incomplete claims only.** `complete` claims need no special routing. `pending` claims cannot bypass human review. Express is only meaningful for `incomplete` claims with fewer than 2 unresolved issues and no missing documents.
+**Express flag is scoped to incomplete claims only.** `complete` claims need no special routing. `needs_review` claims cannot bypass human review. Express is only meaningful for `incomplete` claims with fewer than 2 unresolved issues and no missing documents.
 
 **Retry is in the adapter layer, not DocReader.** Transient API failures (rate-limits, 5xx) are retried by `llm_adapters._with_retry` before they propagate. `DocReader` sees either a successful result or a `ParseFailedError` — it does not need to know about network-level retry logic.
 
@@ -536,7 +592,7 @@ claims/
 
 **Single source of truth for claim state.** `claim_state.json` is the only persisted record. `conversation_log` is part of `Claim` and serialised within it.
 
-**`DocRecord.parse_status` uses `unprocessed`, not `pending`.** At the doc level, `unprocessed` means not yet parsed — semantically distinct from `Claim.status = "pending"`, which means company staff must act.
+**`DocRecord.parse_status` uses `unprocessed`, not `needs_review`.** At the doc level, `unprocessed` means not yet parsed — semantically distinct from `Claim.status = "needs_review"`, which means company staff must act.
 
 ---
 
@@ -552,4 +608,4 @@ claims/
 
 **API layer:** `Chatbot` can be replaced with a FastAPI endpoint. `Claim` already serialises to JSON via Pydantic.
 
-**Non-blocking reply handling:** `ClaimState` is fully serialisable. The system can be extended to suspend after sending a customer message and resume on an inbound webhook or queue event using LangGraph's checkpointer — no changes to `ClaimParser` or `Claim` required.
+**Non-blocking reply handling:** To support inbound webhook or queue resumption, `ClaimState` would need refactoring — `llm_client`, `chatbot`, and `parser` are not serialisable and must be moved to `ClaimAgent` instance variables before LangGraph checkpointing becomes viable.

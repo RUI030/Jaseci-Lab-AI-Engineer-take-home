@@ -185,7 +185,7 @@ def test_conversation_round_inbound():
 
 def test_claim_defaults():
     c = Claim(claim_id="CLM-001", uploaded_at="2024-01-01T00:00:00")
-    assert c.status == "pending"
+    assert c.status == "needs_review"
     assert c.reply_count == 0
     assert c.doc_table == []
     assert c.extracted_fields == {}
@@ -230,7 +230,7 @@ def test_priority_record_express():
 def test_priority_record_no_express():
     pr = PriorityRecord(
         claim_id="CLM-003",
-        status="pending",
+        status="needs_review",
         uploaded_at="2024-01-01T00:00:00",
         express=False,
         priority_rank=5,

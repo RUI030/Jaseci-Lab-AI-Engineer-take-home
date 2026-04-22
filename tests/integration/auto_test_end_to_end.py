@@ -148,11 +148,11 @@ def test_clm003_duplicate_settlement(agent, tmp_path):
 
 
 def test_prioritize_all_statuses(agent):
-    """prioritize_claims correctly orders complete > incomplete > pending."""
+    """prioritize_claims correctly orders complete > incomplete > needs_review."""
     from core.models import Claim
 
     claims = [
-        Claim(claim_id="CLM-P", status="pending", uploaded_at="2024-01-03T00:00:00"),
+        Claim(claim_id="CLM-P", status="needs_review", uploaded_at="2024-01-03T00:00:00"),
         Claim(claim_id="CLM-C", status="complete", uploaded_at="2024-01-01T00:00:00"),
         Claim(claim_id="CLM-I", status="incomplete", uploaded_at="2024-01-02T00:00:00"),
     ]

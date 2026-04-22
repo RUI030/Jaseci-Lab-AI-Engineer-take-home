@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Claim Processing Report</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body  { background: #f8f9fa; }
+    pre   { white-space: pre-wrap; word-break: break-word; font-size: 0.82em; }
+    .font-monospace { font-size: 0.88em; }
+    small[title] { cursor: help; }
+  </style>
+</head>
+<body>
+<div class="container py-5">
+
+  <div class="d-flex align-items-baseline gap-3 mb-1">
+    <h1 class="mb-0">Claim Processing Report</h1>
+  </div>
+  <p class="text-muted mb-4">
+    5 claim(s) &nbsp;·&nbsp;
+    <span class="text-success fw-semibold">0 complete</span> &nbsp;·&nbsp;
+    <span class="text-warning fw-semibold">2 incomplete</span> &nbsp;·&nbsp;
+    <span class="text-danger fw-semibold">3 needs_review</span>
+  </p>
+
+  
+    <div class="card mb-5">
+      <div class="card-header fw-semibold">Priority Ranking</div>
+      <div class="card-body p-0">
+        <table class="table table-sm table-hover mb-0">
+          <thead class="table-light"><tr>
+            <th>Rank</th><th>Claim</th><th>Status</th>
+            <th>Express</th><th>Uploaded</th><th>Reason</th>
+          </tr></thead>
+          <tbody><tr>
+          <td class="text-center fw-bold">#1</td>
+          <td class="font-monospace fw-semibold">CLM-001</td>
+          <td><span class="badge text-bg-warning">NEEDS_REVIEW</span></td>
+          <td></td>
+          <td>2026-04-22</td>
+          <td class="text-muted small">Requires human review — queued in order of submission date.</td>
+        </tr><tr>
+          <td class="text-center fw-bold">#2</td>
+          <td class="font-monospace fw-semibold">CLM-003</td>
+          <td><span class="badge text-bg-warning">NEEDS_REVIEW</span></td>
+          <td></td>
+          <td>2026-04-22</td>
+          <td class="text-muted small">Requires human review — queued in order of submission date.</td>
+        </tr><tr>
+          <td class="text-center fw-bold">#3</td>
+          <td class="font-monospace fw-semibold">CLM-004</td>
+          <td><span class="badge text-bg-warning">NEEDS_REVIEW</span></td>
+          <td></td>
+          <td>2026-04-22</td>
+          <td class="text-muted small">Requires human review — queued in order of submission date.</td>
+        </tr><tr>
+          <td class="text-center fw-bold">#4</td>
+          <td class="font-monospace fw-semibold">CLM-002</td>
+          <td><span class="badge text-bg-danger">INCOMPLETE</span></td>
+          <td></td>
+          <td>2026-04-22</td>
+          <td class="text-muted small">Incomplete claim — customer notification required.</td>
+        </tr><tr>
+          <td class="text-center fw-bold">#5</td>
+          <td class="font-monospace fw-semibold">CLM-005</td>
+          <td><span class="badge text-bg-danger">INCOMPLETE</span></td>
+          <td></td>
+          <td>2026-04-22</td>
+          <td class="text-muted small">Incomplete claim — customer notification required.</td>
+        </tr></tbody>
+        </table>
+      </div>
+    </div>
+
+  <h3 class="mb-3">Claim Details</h3>
+  
+    <div class="card mb-4 border-warning">
+      <div class="card-header bg-warning bg-opacity-10 d-flex justify-content-between align-items-center">
+        <h5 class="mb-0 fw-bold font-monospace">CLM-001</h5>
+        <div>
+          <span class="badge text-bg-warning">NEEDS_REVIEW</span>
+          <small class="text-muted ms-2">uploaded 2026-04-22</small>
+          <small class="text-muted ms-2">· 0 reply round(s)</small>
+        </div>
+      </div>
+      <div class="card-body">
+    
+<h6 class="mt-1">Documents</h6>
+<table class="table table-sm table-hover table-bordered small mb-3">
+      <thead class="table-light"><tr>
+        <th>File</th><th>Type</th><th>Status</th><th>Parse</th>
+      </tr></thead><tbody>
+<tr>
+          <td class="font-monospace">adjuster_note.png</td>
+          <td>settlement_breakdown</td>
+          <td><span class="badge text-bg-success">present</span></td>
+          <td><span class="text-success">complete</span></td>
+        </tr>
+<tr>
+          <td class="font-monospace">finance_agreement.png</td>
+          <td>finance_agreement</td>
+          <td><span class="badge text-bg-success">present</span></td>
+          <td><span class="text-success">complete</span></td>
+        </tr>
+<tr>
+          <td class="font-monospace">police_report.pdf</td>
+          <td>police_report</td>
+          <td><span class="badge text-bg-success">present</span></td>
+          <td><span class="text-success">complete</span></td>
+        </tr>
+<tr title="Multiple &#x27;settlement_breakdown&#x27; documents found; &#x27;adjuster_note.png&#x27; treated as authoritative.">
+          <td class="font-monospace">settlement_breakdown.pdf</td>
+          <td>settlement_breakdown</td>
+          <td><span class="badge text-bg-warning">duplicate</span> <small class="text-muted">(multiple_versions)</small></td>
+          <td><span class="text-success">complete</span></td>
+        </tr>
+</tbody></table>
+<h6>Extracted Fields <small class="text-muted fw-normal">(highest-confidence wins per field)</small></h6>
+<table class="table table-sm table-hover table-bordered small mb-3">
+          <thead class="table-light"><tr>
+            <th>Field</th><th>Value</th><th>Confidence</th><th>Valid</th>
+          </tr></thead><tbody>
+<tr>
+              <td>VIN <small class="text-muted">(required)</small></td>
+              <td class="font-monospace">1HGCM82633A004352</td>
+              <td><span class="badge text-bg-success">high</span></td>
+              <td class="text-success fw-bold">✓</td>
+            </tr>
+<tr>
+              <td>date_of_loss <small class="text-muted">(required)</small></td>
+              <td class="font-monospace">2026-02-14</td>
+              <td><span class="badge text-bg-success">high</span></td>
+              <td class="text-success fw-bold">✓</td>
+            </tr>
+<tr>
+              <td>insurance_payout <small class="text-muted">(required)</small></td>
+              <td class="font-monospace">18750.00</td>
+              <td><span class="badge text-bg-success">high</span></td>
+              <td class="text-success fw-bold">✓</td>
+            </tr>
+<tr>
+              <td>outstanding_loan_balance <small class="text-muted">(optional)</small></td>
+              <td class="font-monospace">22340.55</td>
+              <td><span class="badge text-bg-success">high</span></td>
+              <td class="text-success fw-bold">✓</td>
+            </tr>
+</tbody></table>
+<h6>Validation Issues</h6><ul class="list-group list-group-flush mb-3">
+<li class="list-group-item list-group-item-warning py-1 small">
+              <span class="badge text-bg-warning">warning</span>
+              <strong class="ms-1">VIN</strong>:
+              Field &#x27;VIN&#x27; has conflicting values; trusted value &#x27;1HGCM82633A004352&#x27; (confidence-weighted majority). Overruled: adjuster_note.png: 1HGCM82533A00932 (confidence=medium), finance_agreement.png: 1HGCM86263A300432 (confidence=medium).
+            </li>
+<li class="list-group-item list-group-item-warning py-1 small">
+              <span class="badge text-bg-warning">warning</span>
+              <strong class="ms-1">insurance_payout</strong>:
+              Field &#x27;insurance_payout&#x27; has conflicting values; trusted value &#x27;18750.00&#x27; (confidence-weighted majority). Overruled: adjuster_note.png: 18500-19000 (confidence=medium).
+            </li>
+<li class="list-group-item list-group-item-warning py-1 small">
+              <span class="badge text-bg-warning">warning</span>
+              <strong class="ms-1">outstanding_loan_balance</strong>:
+              Field &#x27;outstanding_loan_balance&#x27; has conflicting values; trusted value &#x27;22340.55&#x27; (confidence-weighted majority). Overruled: adjuster_note.png: 22000 (confidence=medium).
+            </li>
+</ul>
+<div class="alert alert-warning py-2 small mb-2">
+      <strong>Decision:</strong> <span class="badge text-bg-warning">NEEDS_REVIEW</span> — 3 warning(s) — staff notified
+    </div>
+<h6 class="mt-3">Customer Message(s) Sent (1)</h6>
+<pre class="bg-light border rounded p-2 small">Hello,
+
+We are writing regarding your claim CLM-001. Please see the update(s) below:
+
+1. Note: a low-confidence discrepancy was detected in field &quot;VIN&quot; and has been
+flagged for staff review. No action is required from you at this time.
+
+2. Note: a low-confidence discrepancy was detected in field &quot;insurance_payout&quot; and has been
+flagged for staff review. No action is required from you at this time.
+
+3. Note: a low-confidence discrepancy was detected in field &quot;outstanding_loan_balance&quot; and has been
+flagged for staff review. No action is required from you at this time.
+
+If you have any questions, please do not hesitate to reach out.
+
+Best regards,
+Claims Processing Team</pre>
+<h6 class="mt-3">Tools Used (7)</h6>
+<ul class="list-unstyled small font-monospace mb-0">
+<li class="text-muted">· classify_document({&#x27;file_name&#x27;: &#x27;adjuster_note.png&#x27;}) → inferred_doc_type=unknown</li>
+<li class="text-muted">· classify_document({&#x27;file_name&#x27;: &#x27;finance_agreement.png&#x27;}) → inferred_doc_type=finance_agreement</li>
+<li class="text-muted">· classify_document({&#x27;file_name&#x27;: &#x27;police_report.pdf&#x27;}) → inferred_doc_type=police_report</li>
+<li class="text-muted">· classify_document({&#x27;file_name&#x27;: &#x27;settlement_breakdown.pdf&#x27;}) → inferred_doc_type=settlement_breakdown</li>
+<li class="text-muted">· check_field_consistency({&#x27;field_name&#x27;: &#x27;VIN&#x27;, &#x27;values&#x27;: {&#x27;adjuster_note.png&#x27;: &#x27;1HGCM82533A00932&#x27;, &#x27;finance_agreement.png&#x27;: &#x27;1HGCM86263A300432&#x27;, &#x27;police_report.pdf&#x27;: &#x27;1HGCM82633A004352&#x27;, &#x27;settlement_breakdown.pdf&#x27;: &#x27;1HGCM82633A004352&#x27;}}) → consistent=False, unique_values=[&#x27;1HGCM82533A00932&#x27;, &#x27;1HGCM82633A004352&#x27;, &#x27;1HGCM86263A300432&#x27;]</li>
+<li class="text-muted">· check_field_consistency({&#x27;field_name&#x27;: &#x27;insurance_payout&#x27;, &#x27;values&#x27;: {&#x27;adjuster_note.png&#x27;: &#x27;18500-19000&#x27;, &#x27;settlement_breakdown.pdf&#x27;: &#x27;18750.00&#x27;}}) → consistent=False, unique_values=[&#x27;18500-19000&#x27;, &#x27;18750.00&#x27;]</li>
+<li class="text-muted">· check_field_consistency({&#x27;field_name&#x27;: &#x27;outstanding_loan_balance&#x27;, &#x27;values&#x27;: {&#x27;adjuster_note.png&#x27;: &#x27;22000&#x27;, &#x27;finance_agreement.png&#x27;: &#x27;22340.55&#x27;, &#x27;settlement_breakdown.pdf&#x27;: &#x27;22340.55&#x27;}}) → consistent=False, unique_values=[&#x27;22000&#x27;, &#x27;22340.55&#x27;]</li>
+</ul>
+</div></div>
+
+    <div class="card mb-4 border-danger">
+      <div class="card-header bg-danger bg-opacity-10 d-flex justify-content-between align-items-center">
+        <h5 class="mb-0 fw-bold font-monospace">CLM-002</h5>
+        <div>
+          <span class="badge text-bg-danger">INCOMPLETE</span>
+          <small class="text-muted ms-2">uploaded 2026-04-22</small>
+          <small class="text-muted ms-2">· 0 reply round(s)</small>
+        </div>
+      </div>
+      <div class="card-body">
+    
+<h6 class="mt-1">Documents</h6>
+<table class="table table-sm table-hover table-bordered small mb-3">
+      <thead class="table-light"><tr>
+        <th>File</th><th>Type</th><th>Status</th><th>Parse</th>
+      </tr></thead><tbody>
+<tr>
+          <td class="font-monospace">customer_reply.txt</td>
+          <td>customer_reply</td>
+          <td><span class="badge text-bg-success">present</span></td>
+          <td><span class="text-success">complete</span></td>
+        </tr>
+<tr>
+          <td class="font-monospace">finance_agreement.pdf</td>
+          <td>finance_agreement</td>
+          <td><span class="badge text-bg-success">present</span></td>
+          <td><span class="text-success">complete</span></td>
+        </tr>
+<tr>
+          <td class="font-monospace">settlement_breakdown.png</td>
+          <td>settlement_breakdown</td>
+          <td><span class="badge text-bg-success">present</span></td>
+          <td><span class="text-success">complete</span></td>
+        </tr>
+<tr title="Required document not found in claim folder.">
+          <td class="font-monospace">[missing] police_report</td>
+          <td>police_report</td>
+          <td><span class="badge text-bg-danger">missing</span></td>
+          <td><span class="text-danger">unprocessed</span></td>
+        </tr>
+</tbody></table>
+<h6>Extracted Fields <small class="text-muted fw-normal">(highest-confidence wins per field)</small></h6>
+<table class="table table-sm table-hover table-bordered small mb-3">
+          <thead class="table-light"><tr>
+            <th>Field</th><th>Value</th><th>Confidence</th><th>Valid</th>
+          </tr></thead><tbody>
+<tr>
+              <td>VIN <small class="text-muted">(required)</small></td>
+              <td class="font-monospace">3FADP4BJ7EM207685</td>
+              <td><span class="badge text-bg-success">high</span></td>
+              <td class="text-success fw-bold">✓</td>
+            </tr>
+<tr>
+              <td>date_of_loss <small class="text-muted" title=" | Date format ambiguous; resolved using US locale (January 28th → 2026-01-28).">ⓘ</small> <small class="text-muted">(required)</small></td>
+              <td class="font-monospace">2026-01-28</td>
+              <td><span class="badge text-bg-warning">medium</span></td>
+              <td class="text-success fw-bold">✓</td>
+            </tr>
+<tr>
+              <td>insurance_payout <small class="text-muted" title=" | Scanned image; currency symbols and commas stripped; value is positive and numeric.">ⓘ</small> <small class="text-muted">(required)</small></td>
+              <td class="font-monospace">12400.00</td>
+              <td><span class="badge text-bg-warning">medium</span></td>
+              <td class="text-success fw-bold">✓</td>
+            </tr>
+<tr>
+              <td>outstanding_loan_balance <small class="text-muted">(optional)</small></td>
+              <td class="font-monospace">15890.20</td>
+              <td><span class="badge text-bg-success">high</span></td>
+              <td class="text-success fw-bold">✓</td>
+            </tr>
+</tbody></table>
+<h6>Validation Issues</h6><ul class="list-group list-group-flush mb-3">
+<li class="list-group-item list-group-item-warning py-1 small">
+              <span class="badge text-bg-warning">warning</span>
+              <strong class="ms-1">VIN</strong>:
+              Field &#x27;VIN&#x27; has conflicting values; trusted value &#x27;3FADP4BJ7EM207685&#x27; (confidence-weighted majority). Overruled: settlement_breakdown.png: 3P4DY4H72M2E07065 (confidence=medium).
+            </li>
+</ul>
+<div class="alert alert-danger py-2 small mb-2">
+      <strong>Decision:</strong> <span class="badge text-bg-danger">INCOMPLETE</span> — Missing: <strong>police_report</strong> &nbsp;·&nbsp; 1 warning(s) — staff notified
+    </div>
+<h6 class="mt-3">Customer Message(s) Sent (1)</h6>
+<pre class="bg-light border rounded p-2 small">Hello,
+
+We are writing regarding your claim CLM-002. Please see the update(s) below:
+
+1. Missing document(s): police_report
+Please upload the required document(s) at your earliest convenience.
+
+2. Note: a low-confidence discrepancy was detected in field &quot;VIN&quot; and has been
+flagged for staff review. No action is required from you at this time.
+
+If you have any questions, please do not hesitate to reach out.
+
+Best regards,
+Claims Processing Team</pre>
+<h6 class="mt-3">Tools Used (4)</h6>
+<ul class="list-unstyled small font-monospace mb-0">
+<li class="text-muted">· classify_document({&#x27;file_name&#x27;: &#x27;customer_reply.txt&#x27;}) → inferred_doc_type=customer_reply</li>
+<li class="text-muted">· classify_document({&#x27;file_name&#x27;: &#x27;finance_agreement.pdf&#x27;}) → inferred_doc_type=finance_agreement</li>
+<li class="text-muted">· classify_document({&#x27;file_name&#x27;: &#x27;settlement_breakdown.png&#x27;}) → inferred_doc_type=settlement_breakdown</li>
+<li class="text-muted">· check_field_consistency({&#x27;field_name&#x27;: &#x27;VIN&#x27;, &#x27;values&#x27;: {&#x27;customer_reply.txt&#x27;: &#x27;3FADP4BJ7EM207685&#x27;, &#x27;finance_agreement.pdf&#x27;: &#x27;3FADP4BJ7EM207685&#x27;, &#x27;settlement_breakdown.png&#x27;: &#x27;3P4DY4H72M2E07065&#x27;}}) → consistent=False, unique_values=[&#x27;3FADP4BJ7EM207685&#x27;, &#x27;3P4DY4H72M2E07065&#x27;]</li>
+</ul>
+</div></div>
+
+    <div class="card mb-4 border-warning">
+      <div class="card-header bg-warning bg-opacity-10 d-flex justify-content-between align-items-center">
+        <h5 class="mb-0 fw-bold font-monospace">CLM-003</h5>
+        <div>
+          <span class="badge text-bg-warning">NEEDS_REVIEW</span>
+          <small class="text-muted ms-2">uploaded 2026-04-22</small>
+          <small class="text-muted ms-2">· 0 reply round(s)</small>
+        </div>
+      </div>
+      <div class="card-body">
+    
+<h6 class="mt-1">Documents</h6>
+<table class="table table-sm table-hover table-bordered small mb-3">
+      <thead class="table-light"><tr>
+        <th>File</th><th>Type</th><th>Status</th><th>Parse</th>
+      </tr></thead><tbody>
+<tr>
+          <td class="font-monospace">finance_agreement.pdf</td>
+          <td>finance_agreement</td>
+          <td><span class="badge text-bg-success">present</span></td>
+          <td><span class="text-success">complete</span></td>
+        </tr>
+<tr>
+          <td class="font-monospace">police_report.png</td>
+          <td>police_report</td>
+          <td><span class="badge text-bg-success">present</span></td>
+          <td><span class="text-success">complete</span></td>
+        </tr>
+<tr>
+          <td class="font-monospace">settlement_breakdown.pdf</td>
+          <td>settlement_breakdown</td>
+          <td><span class="badge text-bg-success">present</span></td>
+          <td><span class="text-success">complete</span></td>
+        </tr>
+<tr title="Multiple &#x27;settlement_breakdown&#x27; documents found; &#x27;settlement_breakdown.pdf&#x27; treated as authoritative.">
+          <td class="font-monospace">settlement_breakdown_v2.pdf</td>
+          <td>settlement_breakdown</td>
+          <td><span class="badge text-bg-warning">duplicate</span> <small class="text-muted">(multiple_versions)</small></td>
+          <td><span class="text-success">complete</span></td>
+        </tr>
+</tbody></table>
+<h6>Extracted Fields <small class="text-muted fw-normal">(highest-confidence wins per field)</small></h6>
+<table class="table table-sm table-hover table-bordered small mb-3">
+          <thead class="table-light"><tr>
+            <th>Field</th><th>Value</th><th>Confidence</th><th>Valid</th>
+          </tr></thead><tbody>
+<tr>
+              <td>VIN <small class="text-muted">(required)</small></td>
+              <td class="font-monospace">2T1BURHE5JC034182</td>
+              <td><span class="badge text-bg-success">high</span></td>
+              <td class="text-success fw-bold">✓</td>
+            </tr>
+<tr>
+              <td>date_of_loss <small class="text-muted">(required)</small></td>
+              <td class="font-monospace">2026-03-05</td>
+              <td><span class="badge text-bg-success">high</span></td>
+              <td class="text-success fw-bold">✓</td>
+            </tr>
+<tr>
+              <td>insurance_payout <small class="text-muted">(required)</small></td>
+              <td class="font-monospace">24100.00</td>
+              <td><span class="badge text-bg-success">high</span></td>
+              <td class="text-success fw-bold">✓</td>
+            </tr>
+<tr>
+              <td>outstanding_loan_balance <small class="text-muted">(optional)</small></td>
+              <td class="font-monospace">27650.00</td>
+              <td><span class="badge text-bg-success">high</span></td>
+              <td class="text-success fw-bold">✓</td>
+            </tr>
+</tbody></table>
+<h6>Validation Issues</h6><ul class="list-group list-group-flush mb-3">
+<li class="list-group-item list-group-item-warning py-1 small">
+              <span class="badge text-bg-warning">warning</span>
+              <strong class="ms-1">VIN</strong>:
+              Field &#x27;VIN&#x27; has conflicting values; trusted value &#x27;2T1BURHE5JC034127&#x27; (confidence-weighted majority). Overruled: finance_agreement.pdf: 2T1BURHE5JC034182 (confidence=high), police_report.png: 2Z1JHUBR85C034127 (confidence=medium).
+            </li>
+<li class="list-group-item list-group-item-warning py-1 small">
+              <span class="badge text-bg-warning">warning</span>
+              <strong class="ms-1">insurance_payout</strong>:
+              Field &#x27;insurance_payout&#x27; differs by 1.2% (settlement_breakdown.pdf: &#x27;24100.00&#x27;, settlement_breakdown_v2.pdf: &#x27;23800.00&#x27;) — within 10.0% tolerance; conservative value &#x27;23800.0&#x27; recommended.
+            </li>
+</ul>
+<div class="alert alert-warning py-2 small mb-2">
+      <strong>Decision:</strong> <span class="badge text-bg-warning">NEEDS_REVIEW</span> — 2 warning(s) — staff notified
+    </div>
+<h6 class="mt-3">Customer Message(s) Sent (1)</h6>
+<pre class="bg-light border rounded p-2 small">Hello,
+
+We are writing regarding your claim CLM-003. Please see the update(s) below:
+
+1. Note: a low-confidence discrepancy was detected in field &quot;VIN&quot; and has been
+flagged for staff review. No action is required from you at this time.
+
+2. Note: a low-confidence discrepancy was detected in field &quot;insurance_payout&quot; and has been
+flagged for staff review. No action is required from you at this time.
+
+If you have any questions, please do not hesitate to reach out.
+
+Best regards,
+Claims Processing Team</pre>
+<h6 class="mt-3">Tools Used (6)</h6>
+<ul class="list-unstyled small font-monospace mb-0">
+<li class="text-muted">· classify_document({&#x27;file_name&#x27;: &#x27;finance_agreement.pdf&#x27;}) → inferred_doc_type=finance_agreement</li>
+<li class="text-muted">· classify_document({&#x27;file_name&#x27;: &#x27;police_report.png&#x27;}) → inferred_doc_type=police_report</li>
+<li class="text-muted">· classify_document({&#x27;file_name&#x27;: &#x27;settlement_breakdown.pdf&#x27;}) → inferred_doc_type=settlement_breakdown</li>
+<li class="text-muted">· classify_document({&#x27;file_name&#x27;: &#x27;settlement_breakdown_v2.pdf&#x27;}) → inferred_doc_type=settlement_breakdown</li>
+<li class="text-muted">· check_field_consistency({&#x27;field_name&#x27;: &#x27;VIN&#x27;, &#x27;values&#x27;: {&#x27;finance_agreement.pdf&#x27;: &#x27;2T1BURHE5JC034182&#x27;, &#x27;police_report.png&#x27;: &#x27;2Z1JHUBR85C034127&#x27;, &#x27;settlement_breakdown.pdf&#x27;: &#x27;2T1BURHE5JC034127&#x27;, &#x27;settlement_breakdown_v2.pdf&#x27;: &#x27;2T1BURHE5JC034127&#x27;}}) → consistent=False, unique_values=[&#x27;2T1BURHE5JC034127&#x27;, &#x27;2T1BURHE5JC034182&#x27;, &#x27;2Z1JHUBR85C034127&#x27;]</li>
+<li class="text-muted">· check_field_consistency({&#x27;field_name&#x27;: &#x27;insurance_payout&#x27;, &#x27;values&#x27;: {&#x27;settlement_breakdown.pdf&#x27;: &#x27;24100.00&#x27;, &#x27;settlement_breakdown_v2.pdf&#x27;: &#x27;23800.00&#x27;}}) → consistent=False, unique_values=[&#x27;23800.00&#x27;, &#x27;24100.00&#x27;]</li>
+</ul>
+</div></div>
+
+    <div class="card mb-4 border-warning">
+      <div class="card-header bg-warning bg-opacity-10 d-flex justify-content-between align-items-center">
+        <h5 class="mb-0 fw-bold font-monospace">CLM-004</h5>
+        <div>
+          <span class="badge text-bg-warning">NEEDS_REVIEW</span>
+          <small class="text-muted ms-2">uploaded 2026-04-22</small>
+          <small class="text-muted ms-2">· 0 reply round(s)</small>
+        </div>
+      </div>
+      <div class="card-body">
+    
+<h6 class="mt-1">Documents</h6>
+<table class="table table-sm table-hover table-bordered small mb-3">
+      <thead class="table-light"><tr>
+        <th>File</th><th>Type</th><th>Status</th><th>Parse</th>
+      </tr></thead><tbody>
+<tr>
+          <td class="font-monospace">finance_agreement.png</td>
+          <td>finance_agreement</td>
+          <td><span class="badge text-bg-success">present</span></td>
+          <td><span class="text-success">complete</span></td>
+        </tr>
+<tr>
+          <td class="font-monospace">police_report.png</td>
+          <td>police_report</td>
+          <td><span class="badge text-bg-success">present</span></td>
+          <td><span class="text-success">complete</span></td>
+        </tr>
+<tr>
+          <td class="font-monospace">settlement_breakdown.png</td>
+          <td>settlement_breakdown</td>
+          <td><span class="badge text-bg-success">present</span></td>
+          <td><span class="text-success">complete</span></td>
+        </tr>
+<tr>
+          <td class="font-monospace">tow_receipt.png</td>
+          <td>unknown</td>
+          <td><span class="badge text-bg-success">present</span></td>
+          <td><span class="text-success">complete</span></td>
+        </tr>
+</tbody></table>
+<h6>Extracted Fields <small class="text-muted fw-normal">(highest-confidence wins per field)</small></h6>
+<table class="table table-sm table-hover table-bordered small mb-3">
+          <thead class="table-light"><tr>
+            <th>Field</th><th>Value</th><th>Confidence</th><th>Valid</th>
+          </tr></thead><tbody>
+<tr>
+              <td>VIN <small class="text-muted" title="VIN must be exactly 17 alphanumeric characters; &#x27;2022 Tesla Model 3&#x27; is not a valid VIN. Value &#x27;2022TESLAMODEL3&#x27; does not match expected format (^[A-Z0-9]{17}$). | OCR may have misinterpreted &#x27;2022 Tesla Model 3&#x27; as VIN.">ⓘ</small> <small class="text-muted">(required)</small></td>
+              <td class="font-monospace">2022TESLAMODEL3</td>
+              <td><span class="badge text-bg-warning">medium</span></td>
+              <td class="text-danger fw-bold">✗</td>
+            </tr>
+<tr>
+              <td>date_of_loss <small class="text-muted" title=" | Date format is ambiguous (MM/DD/YYYY vs DD/MM/YYYY), but context suggests US locale. Confirmed by document text.">ⓘ</small> <small class="text-muted">(required)</small></td>
+              <td class="font-monospace">2025-12-19</td>
+              <td><span class="badge text-bg-warning">medium</span></td>
+              <td class="text-success fw-bold">✓</td>
+            </tr>
+<tr>
+              <td>insurance_payout <small class="text-muted" title="Converted from &#x27;$432.18&#x27; to numeric string &#x27;432.18&#x27;. | Value extracted from &#x27;Total Loss / GAP Provision&#x27; section.">ⓘ</small> <small class="text-muted">(required)</small></td>
+              <td class="font-monospace">432.18</td>
+              <td><span class="badge text-bg-warning">medium</span></td>
+              <td class="text-success fw-bold">✓</td>
+            </tr>
+<tr>
+              <td>outstanding_loan_balance <small class="text-muted" title="Converted from &#x27;$19,200.00&#x27; to numeric string &#x27;19200.00&#x27;. | Value extracted from &#x27;CURRENT OUTSTANDING BALANCE&#x27; section.">ⓘ</small> <small class="text-muted">(optional)</small></td>
+              <td class="font-monospace">19200.00</td>
+              <td><span class="badge text-bg-warning">medium</span></td>
+              <td class="text-success fw-bold">✓</td>
+            </tr>
+</tbody></table>
+<h6>Validation Issues</h6><ul class="list-group list-group-flush mb-3">
+<li class="list-group-item list-group-item-danger py-1 small">
+              <span class="badge text-bg-danger">blocking</span>
+              <strong class="ms-1">VIN</strong>:
+              Field &#x27;VIN&#x27;: no source contains a valid 17-character alphanumeric VIN. Values: &#x27;finance_agreement.png&#x27;: &#x27;2022TESLAMODEL3&#x27;, &#x27;police_report.png&#x27;: &#x27;SYVJ318A7R&#x27;, &#x27;settlement_breakdown.png&#x27;: &#x27;ATF3447821&#x27;.
+            </li>
+</ul>
+<div class="alert alert-warning py-2 small mb-2">
+      <strong>Decision:</strong> <span class="badge text-bg-warning">NEEDS_REVIEW</span> — 1 blocking issue
+    </div>
+<h6 class="mt-3">Customer Message(s) Sent (1)</h6>
+<pre class="bg-light border rounded p-2 small">Hello,
+
+We are writing regarding your claim CLM-004. Please see the update(s) below:
+
+1. Discrepancy detected in field &quot;VIN&quot;:
+  - finance_agreement.png: 2022TESLAMODEL3
+  - police_report.png: SYVJ318A7R
+  - settlement_breakdown.png: ATF3447821
+Could you confirm which value is correct?
+
+If you have any questions, please do not hesitate to reach out.
+
+Best regards,
+Claims Processing Team</pre>
+<h6 class="mt-3">Tools Used (8)</h6>
+<ul class="list-unstyled small font-monospace mb-0">
+<li class="text-muted">· classify_document({&#x27;file_name&#x27;: &#x27;finance_agreement.png&#x27;}) → inferred_doc_type=finance_agreement</li>
+<li class="text-muted">· classify_document({&#x27;file_name&#x27;: &#x27;police_report.png&#x27;}) → inferred_doc_type=police_report</li>
+<li class="text-muted">· classify_document({&#x27;file_name&#x27;: &#x27;settlement_breakdown.png&#x27;}) → inferred_doc_type=settlement_breakdown</li>
+<li class="text-muted">· classify_document({&#x27;file_name&#x27;: &#x27;tow_receipt.png&#x27;}) → inferred_doc_type=unknown</li>
+<li class="text-muted">· check_field_consistency({&#x27;field_name&#x27;: &#x27;VIN&#x27;, &#x27;values&#x27;: {&#x27;finance_agreement.png&#x27;: &#x27;2022TESLAMODEL3&#x27;, &#x27;police_report.png&#x27;: &#x27;SYVJ318A7R&#x27;, &#x27;settlement_breakdown.png&#x27;: &#x27;ATF3447821&#x27;}}) → consistent=False, unique_values=[&#x27;2022TESLAMODEL3&#x27;, &#x27;ATF3447821&#x27;, &#x27;SYVJ318A7R&#x27;]</li>
+<li class="text-muted">· validate_vin({&#x27;vin&#x27;: &#x27;2022TESLAMODEL3&#x27;}) → valid=False, reason=&#x27;2022TESLAMODEL3&#x27; does not match the 17-character alphanumeric VIN format</li>
+<li class="text-muted">· validate_vin({&#x27;vin&#x27;: &#x27;ATF3447821&#x27;}) → valid=False, reason=&#x27;ATF3447821&#x27; does not match the 17-character alphanumeric VIN format</li>
+<li class="text-muted">· validate_vin({&#x27;vin&#x27;: &#x27;SYVJ318A7R&#x27;}) → valid=False, reason=&#x27;SYVJ318A7R&#x27; does not match the 17-character alphanumeric VIN format</li>
+</ul>
+</div></div>
+
+    <div class="card mb-4 border-danger">
+      <div class="card-header bg-danger bg-opacity-10 d-flex justify-content-between align-items-center">
+        <h5 class="mb-0 fw-bold font-monospace">CLM-005</h5>
+        <div>
+          <span class="badge text-bg-danger">INCOMPLETE</span>
+          <small class="text-muted ms-2">uploaded 2026-04-22</small>
+          <small class="text-muted ms-2">· 0 reply round(s)</small>
+        </div>
+      </div>
+      <div class="card-body">
+    
+<h6 class="mt-1">Documents</h6>
+<table class="table table-sm table-hover table-bordered small mb-3">
+      <thead class="table-light"><tr>
+        <th>File</th><th>Type</th><th>Status</th><th>Parse</th>
+      </tr></thead><tbody>
+<tr>
+          <td class="font-monospace">customer_reply.txt</td>
+          <td>customer_reply</td>
+          <td><span class="badge text-bg-success">present</span></td>
+          <td><span class="text-success">complete</span></td>
+        </tr>
+<tr>
+          <td class="font-monospace">police_report.png</td>
+          <td>police_report</td>
+          <td><span class="badge text-bg-success">present</span></td>
+          <td><span class="text-success">complete</span></td>
+        </tr>
+<tr>
+          <td class="font-monospace">settlement_breakdown.pdf</td>
+          <td>settlement_breakdown</td>
+          <td><span class="badge text-bg-success">present</span></td>
+          <td><span class="text-success">complete</span></td>
+        </tr>
+<tr title="Required document not found in claim folder.">
+          <td class="font-monospace">[missing] finance_agreement</td>
+          <td>finance_agreement</td>
+          <td><span class="badge text-bg-danger">missing</span></td>
+          <td><span class="text-danger">unprocessed</span></td>
+        </tr>
+</tbody></table>
+<h6>Extracted Fields <small class="text-muted fw-normal">(highest-confidence wins per field)</small></h6>
+<table class="table table-sm table-hover table-bordered small mb-3">
+          <thead class="table-light"><tr>
+            <th>Field</th><th>Value</th><th>Confidence</th><th>Valid</th>
+          </tr></thead><tbody>
+<tr>
+              <td>VIN <small class="text-muted">(required)</small></td>
+              <td class="font-monospace">1N4AL3AP8JC231504</td>
+              <td><span class="badge text-bg-success">high</span></td>
+              <td class="text-success fw-bold">✓</td>
+            </tr>
+<tr>
+              <td>date_of_loss <small class="text-muted">(required)</small></td>
+              <td class="font-monospace">2026-03-28</td>
+              <td><span class="badge text-bg-success">high</span></td>
+              <td class="text-success fw-bold">✓</td>
+            </tr>
+<tr>
+              <td>insurance_payout <small class="text-muted">(required)</small></td>
+              <td class="font-monospace">31500.00</td>
+              <td><span class="badge text-bg-success">high</span></td>
+              <td class="text-success fw-bold">✓</td>
+            </tr>
+<tr>
+              <td>outstanding_loan_balance <small class="text-muted">(optional)</small></td>
+              <td class="font-monospace">35120.75</td>
+              <td><span class="badge text-bg-success">high</span></td>
+              <td class="text-success fw-bold">✓</td>
+            </tr>
+</tbody></table>
+<h6>Validation Issues</h6><ul class="list-group list-group-flush mb-3">
+<li class="list-group-item list-group-item-warning py-1 small">
+              <span class="badge text-bg-warning">warning</span>
+              <strong class="ms-1">date_of_loss</strong>:
+              Field &#x27;date_of_loss&#x27; has conflicting values; trusted value &#x27;2026-03-22&#x27; (confidence-weighted majority). Overruled: settlement_breakdown.pdf: 2026-03-28 (confidence=high).
+            </li>
+<li class="list-group-item list-group-item-warning py-1 small">
+              <span class="badge text-bg-warning">warning</span>
+              <strong class="ms-1">outstanding_loan_balance</strong>:
+              Field &#x27;outstanding_loan_balance&#x27; has conflicting values; trusted value &#x27;35120.75&#x27; (confidence-weighted majority). Overruled: customer_reply.txt: 35000 (confidence=medium).
+            </li>
+<li class="list-group-item list-group-item-warning py-1 small">
+              <span class="badge text-bg-warning">warning</span>
+              <strong class="ms-1">VIN</strong>:
+              Field &#x27;VIN&#x27; has conflicting values; trusted value &#x27;1N4AL3AP8JC231504&#x27; (confidence-weighted majority). Overruled: police_report.png: 1N4A3AB88C231504 (confidence=medium).
+            </li>
+</ul>
+<div class="alert alert-danger py-2 small mb-2">
+      <strong>Decision:</strong> <span class="badge text-bg-danger">INCOMPLETE</span> — Missing: <strong>finance_agreement</strong> &nbsp;·&nbsp; 3 warning(s) — staff notified
+    </div>
+<h6 class="mt-3">Customer Message(s) Sent (1)</h6>
+<pre class="bg-light border rounded p-2 small">Hello,
+
+We are writing regarding your claim CLM-005. Please see the update(s) below:
+
+1. Missing document(s): finance_agreement
+Please upload the required document(s) at your earliest convenience.
+
+2. Note: a low-confidence discrepancy was detected in field &quot;date_of_loss&quot; and has been
+flagged for staff review. No action is required from you at this time.
+
+3. Note: a low-confidence discrepancy was detected in field &quot;outstanding_loan_balance&quot; and has been
+flagged for staff review. No action is required from you at this time.
+
+4. Note: a low-confidence discrepancy was detected in field &quot;VIN&quot; and has been
+flagged for staff review. No action is required from you at this time.
+
+If you have any questions, please do not hesitate to reach out.
+
+Best regards,
+Claims Processing Team</pre>
+<h6 class="mt-3">Tools Used (6)</h6>
+<ul class="list-unstyled small font-monospace mb-0">
+<li class="text-muted">· classify_document({&#x27;file_name&#x27;: &#x27;customer_reply.txt&#x27;}) → inferred_doc_type=customer_reply</li>
+<li class="text-muted">· classify_document({&#x27;file_name&#x27;: &#x27;police_report.png&#x27;}) → inferred_doc_type=police_report</li>
+<li class="text-muted">· classify_document({&#x27;file_name&#x27;: &#x27;settlement_breakdown.pdf&#x27;}) → inferred_doc_type=settlement_breakdown</li>
+<li class="text-muted">· check_field_consistency({&#x27;field_name&#x27;: &#x27;date_of_loss&#x27;, &#x27;values&#x27;: {&#x27;customer_reply.txt&#x27;: &#x27;2026-03-22&#x27;, &#x27;police_report.png&#x27;: &#x27;2026-03-22&#x27;, &#x27;settlement_breakdown.pdf&#x27;: &#x27;2026-03-28&#x27;}}) → consistent=False, unique_values=[&#x27;2026-03-22&#x27;, &#x27;2026-03-28&#x27;]</li>
+<li class="text-muted">· check_field_consistency({&#x27;field_name&#x27;: &#x27;outstanding_loan_balance&#x27;, &#x27;values&#x27;: {&#x27;customer_reply.txt&#x27;: &#x27;35000&#x27;, &#x27;settlement_breakdown.pdf&#x27;: &#x27;35120.75&#x27;}}) → consistent=False, unique_values=[&#x27;35000&#x27;, &#x27;35120.75&#x27;]</li>
+<li class="text-muted">· check_field_consistency({&#x27;field_name&#x27;: &#x27;VIN&#x27;, &#x27;values&#x27;: {&#x27;police_report.png&#x27;: &#x27;1N4A3AB88C231504&#x27;, &#x27;settlement_breakdown.pdf&#x27;: &#x27;1N4AL3AP8JC231504&#x27;}}) → consistent=False, unique_values=[&#x27;1N4A3AB88C231504&#x27;, &#x27;1N4AL3AP8JC231504&#x27;]</li>
+</ul>
+</div></div>
+
+</div>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

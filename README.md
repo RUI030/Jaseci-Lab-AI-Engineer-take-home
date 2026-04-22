@@ -85,7 +85,7 @@ python main.py --claim claims/CLM-001 --no-cache
 
 Results are cached to `<claim_folder>/.cache/claim_state.json` after each run. On subsequent runs:
 - `complete` claims are loaded from cache and skipped.
-- `incomplete` and `pending` claims are always re-processed (new documents may have been added).
+- `incomplete` and `needs_review` claims are always re-processed (new documents may have been added).
 - `--no-cache` forces a full re-run for every claim, including complete ones.
 
 ---
@@ -104,13 +104,34 @@ pytest tests/ -v -m "not integration"
 pytest tests/integration/ -v -m integration
 ```
 
+**HTML report** (no API key, no Jupyter required):
+
+```bash
+python demo/gen_visual.py                        # writes demo/claim_report.html
+python demo/gen_visual.py --output /tmp/out.html # custom output path
+xdg-open demo/claim_report.html                 # Linux
+open demo/claim_report.html                     # macOS
+```
+
+Reads from `.cache/claim_state.json` in each claim folder — run `python main.py --all` first if caches are missing. Generates a self-contained Bootstrap page with priority ranking, per-claim document/field/issue tables, decision summary, and outbound message log.
+
 **Interactive demo notebooks** (human-verified output):
 
 ```bash
-jupyter notebook demo/demo_doc_parsing.ipynb
+jupyter notebook demo/doc_parsing.ipynb
 ```
 
-`demo/demo_doc_parsing.ipynb` — parse individual claim documents and inspect extracted fields with inline document previews. Useful for verifying VLM output quality across different models.
+`demo/doc_parsing.ipynb` — parse individual claim documents and inspect extracted fields with inline document previews. Useful for verifying VLM output quality across different models.
+
+`demo/claim_results.ipynb` — same data as the HTML report but rendered inline in Jupyter.
+
+---
+
+## Design Notes
+
+**Status enum matches the spec:** `complete | incomplete | needs_review`. `incomplete` is reserved for customer-fixable problems (missing doc, same-filename duplicate). `needs_review` covers everything that requires human judgment. The `reply_count` routing branch from an earlier iteration (which made `incomplete` before first reply and `needs_review` after) has been removed — who needs to act does not change based on reply count.
+
+**LangGraph usage:** LangGraph was chosen to learn the framework and explore where graph-based state machines add value. For this scope a plain loop would have been equally functional — the primary benefit was gaining familiarity with conditional edge routing and where it is preferable to nested `if/else`. Note: `ClaimState` holds non-serialisable objects (`llm_client`, `chatbot`, `parser`), so LangGraph checkpointing is not usable without refactoring those out of the state dict.
 
 ---
 

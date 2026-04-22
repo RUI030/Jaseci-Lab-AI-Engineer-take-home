@@ -44,7 +44,7 @@ class DocRecord(BaseModel):
     source_trust: Literal["document", "user_input"]
     parse_status: Literal["complete", "parse_failed", "unprocessed"] = "unprocessed"
     doc_status: Literal["present", "missing", "duplicate"] = "present"
-    duplicate_type: Literal["same_filename", "same_content"] | None = None
+    duplicate_type: Literal["same_filename", "same_content", "multiple_versions"] | None = None
     status_reason: str | None = None
     content_hash: str | None = None
     raw_text: str | None = None
@@ -79,18 +79,20 @@ class ConversationRound(BaseModel):
 
 class Claim(BaseModel):
     claim_id: str
-    status: Literal["complete", "incomplete", "pending"] = "pending"
+    status: Literal["complete", "incomplete", "needs_review"] = "needs_review"
     reply_count: int = 0
     uploaded_at: str
     doc_table: list[DocRecord] = Field(default_factory=list)
     extracted_fields: dict[str, ExtractedField] = Field(default_factory=dict)
     validation_issues: list[ValidationIssue] = Field(default_factory=list)
     conversation_log: list[ConversationRound] = Field(default_factory=list)
+    tools_used: list[dict] = Field(default_factory=list)
+    # each entry: {"tool": "<name>", "input": {...}, "result": {...}}
 
 
 class PriorityRecord(BaseModel):
     claim_id: str
-    status: Literal["complete", "incomplete", "pending"]
+    status: Literal["complete", "incomplete", "needs_review"]
     uploaded_at: str
     express: bool
     priority_rank: int

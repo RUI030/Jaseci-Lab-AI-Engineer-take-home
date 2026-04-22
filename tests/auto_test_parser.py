@@ -189,7 +189,7 @@ def test_determine_status_same_content_duplicate():
                       doc_status="duplicate", duplicate_type="same_content")
         ]
     )
-    assert parser.determine_status(claim) == "pending"
+    assert parser.determine_status(claim) == "needs_review"
 
 
 def test_determine_status_parse_failed():
@@ -198,7 +198,7 @@ def test_determine_status_parse_failed():
             _make_doc("police_report.pdf", "police_report", parse_status="parse_failed")
         ]
     )
-    assert parser.determine_status(claim) == "pending"
+    assert parser.determine_status(claim) == "needs_review"
 
 
 def test_determine_status_unknown_doc_type():
@@ -207,10 +207,10 @@ def test_determine_status_unknown_doc_type():
             _make_doc("unknown.png", "unknown", doc_role="other")
         ]
     )
-    assert parser.determine_status(claim) == "pending"
+    assert parser.determine_status(claim) == "needs_review"
 
 
-def test_determine_status_unresolved_inconsistency_no_reply():
+def test_determine_status_unresolved_inconsistency():
     claim = _make_claim(
         validation_issues=[
             ValidationIssue(
@@ -220,21 +220,7 @@ def test_determine_status_unresolved_inconsistency_no_reply():
             )
         ]
     )
-    assert parser.determine_status(claim) == "incomplete"
-
-
-def test_determine_status_unresolved_inconsistency_after_reply():
-    claim = _make_claim(
-        reply_count=1,
-        validation_issues=[
-            ValidationIssue(
-                issue_type="inconsistency",
-                description="VIN mismatch",
-                resolved=False,
-            )
-        ]
-    )
-    assert parser.determine_status(claim) == "pending"
+    assert parser.determine_status(claim) == "needs_review"
 
 
 def test_determine_status_complete():
@@ -320,7 +306,7 @@ def test_handle_reply_consistent_reply_keeps_incomplete():
         mock_record.fields = [
             _make_field("VIN", "1HGCM82633A004352", source_trust="document")
         ]
-        MockTextReader.return_value.read.return_value = mock_record
+        MockTextReader.return_value.read_text.return_value = mock_record
 
         result = parser.handle_reply(claim, "My VIN is 1HGCM82633A004352", mock_client, [])
 
@@ -346,7 +332,7 @@ def test_handle_reply_inconsistent_adds_validation_issue():
         mock_record.fields = [
             _make_field("VIN", "DIFFERENTVIN000000", source_trust="document")
         ]
-        MockTextReader.return_value.read.return_value = mock_record
+        MockTextReader.return_value.read_text.return_value = mock_record
 
         result = parser.handle_reply(claim, "My VIN is DIFFERENTVIN000000", mock_client, [])
 
@@ -355,4 +341,4 @@ def test_handle_reply_inconsistent_adds_validation_issue():
         if vi.issue_type == "inconsistency" and vi.field_name == "VIN"
     ]
     assert len(inconsistencies) == 1
-    assert result.status == "pending"  # reply_count > 0 + unresolved inconsistency
+    assert result.status == "needs_review"  # unresolved blocking inconsistency

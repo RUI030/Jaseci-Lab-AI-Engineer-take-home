@@ -16,7 +16,6 @@ from core.llm_adapters import BaseLLMClient
 from core.models import DocRecord, ExtractedField, FieldSchema
 
 
-# D3: Cache the threshold at module level — no reason to re-read YAML on every PDF parse.
 _PDF_TEXT_THRESHOLD: int | None = None
 
 
@@ -29,7 +28,6 @@ def _pdf_text_threshold() -> int:
     return _PDF_TEXT_THRESHOLD
 
 
-# R2: Renamed _sha256 → _hash_file (callers want a content hash, not SHA-256 specifically)
 def _hash_file(path: str) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
@@ -66,7 +64,6 @@ _DOC_ROLE = {
 }
 
 
-# R3: Unified parameter name to `schemas` (was `target_fields`)
 _DOC_TYPE_DESCRIPTIONS = """Valid doc_type values — choose the best match:
   - police_report       : official law enforcement accident or incident report
   - finance_agreement   : vehicle purchase contract or loan / financing agreement
@@ -196,13 +193,12 @@ class BaseDocReader(ABC):
                 time.sleep(delay)
             try:
                 return client.generate(prompt, _ExtractionResponse, files=files)
-            except Exception as exc:  # T1: ParseFailedError ⊂ Exception; both branches did the same thing
+            except Exception as exc:
                 last_exc = exc
         raise ParseFailedError(
             f"VLM call failed after {len(delays)} attempts: {last_exc}"
         ) from last_exc
 
-    # T2: shared helper — eliminates copy-pasted DocRecord construction across all three readers
     def _failed_record(
         self,
         file_path: str,
@@ -221,7 +217,7 @@ class BaseDocReader(ABC):
             raw_text=raw_text,
         )
 
-    @abstractmethod  # D2: enforce subclass contract via ABC instead of pragma: no cover
+    @abstractmethod
     def read(
         self,
         file_path: str,
@@ -370,6 +366,37 @@ class ImageReader(BaseDocReader):
 # --- Text ---
 
 class TextReader(BaseDocReader):
+    def read_text(
+        self,
+        content: str,
+        schemas: list[FieldSchema],
+        client: BaseLLMClient,
+    ) -> DocRecord:
+        """Extract fields from a raw string, bypassing the disk roundtrip."""
+        wrapped = f"<document>\n{content}\n</document>"
+        prompt = _build_prompt(
+            schemas,
+            context_note="This is a plain-text customer communication wrapped in XML tags.",
+        )
+        full_prompt = f"{prompt}\n\nDocument content:\n{wrapped}"
+        try:
+            response = self.call_vlm(full_prompt, files=None, client=client)
+            parse_status = "complete"
+        except ParseFailedError as exc:
+            return self._failed_record("<customer_reply>", exc, raw_text=content)
+
+        fields = _response_to_extracted_fields(response, "document", schemas)
+        doc_type = response.get("doc_type", "unknown")
+        return DocRecord(
+            file_name="<customer_reply>",
+            doc_type=doc_type,
+            doc_role=_DOC_ROLE.get(doc_type, "other"),
+            source_trust="document",
+            parse_status=parse_status,
+            raw_text=content,
+            fields=fields,
+        )
+
     def read(
         self,
         file_path: str,
@@ -406,7 +433,6 @@ class TextReader(BaseDocReader):
         )
 
 
-# D1: Module-level function replaces DocReaderFactory class (single static method is a Java-ism)
 def get_doc_reader(file_path: str) -> BaseDocReader:
     suffix = Path(file_path).suffix.lower()
     if suffix == ".pdf":
