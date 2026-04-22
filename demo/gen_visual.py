@@ -286,8 +286,8 @@ def _build_page(claims: list[Claim], records: list[PriorityRecord]) -> str:
   <p class="text-muted mb-4">
     {len(claims)} claim(s) &nbsp;·&nbsp;
     <span class="text-success fw-semibold">{complete} complete</span> &nbsp;·&nbsp;
-    <span class="text-warning fw-semibold">{incomplete} incomplete</span> &nbsp;·&nbsp;
-    <span class="text-danger fw-semibold">{review} needs_review</span>
+    <span class="text-danger fw-semibold">{incomplete} incomplete</span> &nbsp;·&nbsp;
+    <span class="text-warning fw-semibold">{review} needs_review</span>
   </p>
 
   {priority_section}

@@ -309,9 +309,9 @@ class ClaimParser:
         if any(r.parse_status == "parse_failed" for r in claim.doc_table):
             return "needs_review"
 
-        # 6. Unknown doc type
-        if any(r.doc_type == "unknown" for r in claim.doc_table):
-            return "needs_review"
+        # 6. (removed) Unknown doc type on non-required documents is ignored —
+        # extra/supplementary docs the VLM can't classify do not block completion.
+        # Required docs classified as unknown are caught by rule 8 (→ incomplete).
 
         # 7. Unresolved low-confidence required field
         low_conf_issues = [

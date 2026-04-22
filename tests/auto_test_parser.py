@@ -202,12 +202,14 @@ def test_determine_status_parse_failed():
 
 
 def test_determine_status_unknown_doc_type():
+    # Unknown doc type on a non-required document is ignored — required docs missing
+    # drives the status to incomplete, not the unknown type itself.
     claim = _make_claim(
         doc_table=[
             _make_doc("unknown.png", "unknown", doc_role="other")
         ]
     )
-    assert parser.determine_status(claim) == "needs_review"
+    assert parser.determine_status(claim) == "incomplete"
 
 
 def test_determine_status_unresolved_inconsistency():
