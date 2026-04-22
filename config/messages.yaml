@@ -10,11 +10,12 @@ conversation_summary_guideline: |
   {reply_text}
 
   Update the summary to capture all useful information the customer has provided.
-  Be concise (3–5 sentences). Focus on:
-  - Documents the customer has mentioned, promised to submit, or explained are unavailable
-  - Any facts clarified (VIN, dates, amounts, names, circumstances)
-  - Reasons for delays or missing documents
-  - Whether the customer confirmed or disputed any previously flagged discrepancy
+  Be concise (3–5 sentences). For each item note whether it is:
+  - CONFIRMED: customer explicitly agreed with our value
+  - CORRECTED: customer provided a different value than our best guess
+  - ACKNOWLEDGED: customer addressed the issue but did not give a definitive answer
+  - PENDING: issue was raised but customer did not respond to it yet
+  Also capture: reasons for missing documents, promised submission dates, any circumstances mentioned.
 
   Output only the updated summary text — no preamble, no labels, no commentary.
 
@@ -25,13 +26,25 @@ customer_message_guideline: |
   {claim_context}
 
   === WRITING GUIDELINES ===
-  - Warm and professional tone; the customer may be stressed about their situation
-  - If a prior customer reply is shown above, acknowledge it briefly in your opening sentence
-  - List each required action as a numbered item; name documents and fields specifically
-  - For field discrepancies, quote the conflicting values so the customer knows exactly what to confirm
+  Tone and continuity:
+  - Warm and professional; the customer may be stressed
+  - If a conversation summary exists, treat anything already addressed as acknowledged —
+    do NOT re-ask for information the customer has already responded to
+  - Open with 1–2 sentences that acknowledge the conversation so far (if any); skip this if first contact
+
+  Confirmation style (important):
+  - We already have a best-guess value for every flagged field (shown in the claim state above)
+  - Do NOT ask open-ended "which value is correct?" — always lead with our current working value
+    and ask the customer to confirm or correct it. Example:
+    "We currently have your VIN as 3FADP4BJ7EM207685 — could you confirm this is correct?"
+  - For warning-level discrepancies: briefly mention our working value and that staff will verify;
+    tell the customer no action is needed unless they spot something wrong
+
+  Formatting:
+  - Numbered list for action items; one item per issue; be specific about document names and field values
   - Do NOT mention internal system details (confidence scores, parse errors, file formats, system status)
-  - Do NOT include information not listed in the claim state above
-  - Keep the email concise: 1-2 sentence opening, numbered action items, brief closing
+  - Do NOT include information not present in the claim state above
+  - Concise: opening acknowledgement + numbered items + brief closing
   - Sign off as "Claims Processing Team"
 
   Write the email now. Output only the email body — no subject line, no extra commentary.

@@ -663,31 +663,51 @@ class ClaimParser:
             else:
                 lines.append(f"  OK: {r.file_name} ({r.doc_type})")
 
-        # Actionable issues
-        actionable = [vi for vi in claim.validation_issues if not vi.resolved]
-        if actionable:
-            lines.append("\nIssues requiring customer action:")
-            for i, vi in enumerate(actionable, 1):
-                if vi.severity == "blocking":
-                    if vi.resubmit_doc:
+        # Issues — split into blocking (needs customer action) and warning (staff-handled, inform only)
+        blocking = [vi for vi in claim.validation_issues if not vi.resolved and vi.severity == "blocking"]
+        warnings = [vi for vi in claim.validation_issues if not vi.resolved and vi.severity == "warning"]
+
+        if blocking:
+            lines.append("\nItems requiring customer confirmation or action:")
+            for i, vi in enumerate(blocking, 1):
+                if vi.resubmit_doc:
+                    lines.append(
+                        f"  {i}. Field '{vi.field_name}': document '{vi.resubmit_doc}' appears unreliable. "
+                        f"Ask customer to re-submit a clearer copy, or confirm it is correct as-is."
+                    )
+                else:
+                    ef = claim.extracted_fields.get(vi.field_name or "")
+                    best_guess = ef.unified_value if ef and ef.unified_value else None
+                    if best_guess:
+                        conflict = {doc: val for doc, val in vi.values.items() if val != best_guess}
+                        conflict_str = "; ".join(f"{d} says \"{v}\"" for d, v in conflict.items())
                         lines.append(
-                            f"  {i}. Field '{vi.field_name}' discrepancy — "
-                            f"'{vi.resubmit_doc}' appears unreliable; ask customer to re-submit it"
+                            f"  {i}. Field '{vi.field_name}': our current best guess is \"{best_guess}\". "
+                            f"However, {conflict_str}. "
+                            f"Ask customer to confirm whether \"{best_guess}\" is correct, or provide the right value."
                         )
                     else:
-                        values_detail = ""
-                        if vi.values:
-                            values_detail = " Values: " + "; ".join(
-                                f"{doc}: {val}" for doc, val in vi.values.items()
-                            )
+                        all_vals = "; ".join(f"{d}: \"{v}\"" for d, v in vi.values.items())
                         lines.append(
-                            f"  {i}. Field '{vi.field_name}' is inconsistent across documents.{values_detail} "
-                            f"Ask customer to confirm the correct value."
+                            f"  {i}. Field '{vi.field_name}' has conflicting values ({all_vals}) "
+                            f"with no clear winner. Ask customer to provide the correct value."
                         )
-                else:
+
+        if warnings:
+            lines.append("\nNotes (staff-handled — inform customer no action required):")
+            for i, vi in enumerate(warnings, 1):
+                ef = claim.extracted_fields.get(vi.field_name or "")
+                best_guess = ef.unified_value if ef and ef.unified_value else None
+                if best_guess:
                     lines.append(
                         f"  {i}. Minor discrepancy in '{vi.field_name}' — "
-                        f"staff will handle; inform customer no action is needed from them."
+                        f"we are using \"{best_guess}\" as the working value; staff will verify. "
+                        f"Mention this to the customer as a courtesy so they are not surprised."
+                    )
+                else:
+                    lines.append(
+                        f"  {i}. Minor discrepancy in '{vi.field_name}' — staff will handle; "
+                        f"tell customer no action is needed."
                     )
 
         return "\n".join(lines)
