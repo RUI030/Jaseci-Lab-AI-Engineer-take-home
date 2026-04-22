@@ -6,12 +6,25 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from core.doc_reader import (
-    DocReaderFactory,
+    get_doc_reader,
     ImageReader,
     PDFReader,
     TextReader,
     BaseDocReader,
 )
+from core.models import DocRecord
+
+
+# Minimal concrete subclass so we can test call_vlm without triggering ABC enforcement
+class _ConcreteReader(BaseDocReader):
+    def read(self, file_path, schemas, client):  # pragma: no cover
+        return DocRecord(
+            file_name="stub.txt",
+            doc_type="unknown",
+            doc_role="other",
+            source_trust="document",
+            parse_status="unprocessed",
+        )
 from core.exceptions import ParseFailedError
 from core.models import FieldSchema
 
@@ -51,7 +64,7 @@ MOCK_RESPONSE = {
 }
 
 
-# --- DocReaderFactory routing ---
+# --- get_doc_reader routing ---
 
 @pytest.mark.parametrize(
     "path,expected",
@@ -64,19 +77,19 @@ MOCK_RESPONSE = {
     ],
 )
 def test_factory_routing(path, expected):
-    reader = DocReaderFactory.get_reader(path)
+    reader = get_doc_reader(path)
     assert isinstance(reader, expected)
 
 
 def test_factory_unsupported_type():
     with pytest.raises(ValueError, match="Unsupported file type"):
-        DocReaderFactory.get_reader("data.csv")
+        get_doc_reader("data.csv")
 
 
 # --- BaseDocReader.call_vlm retry logic ---
 
 def test_call_vlm_succeeds_on_third_attempt():
-    reader = BaseDocReader()
+    reader = _ConcreteReader()
     mock_client = MagicMock()
     mock_client.generate.side_effect = [
         ParseFailedError("fail 1"),
@@ -90,7 +103,7 @@ def test_call_vlm_succeeds_on_third_attempt():
 
 
 def test_call_vlm_raises_after_all_failures():
-    reader = BaseDocReader()
+    reader = _ConcreteReader()
     mock_client = MagicMock()
     mock_client.generate.side_effect = ParseFailedError("always fails")
     with patch("time.sleep"):
@@ -100,7 +113,7 @@ def test_call_vlm_raises_after_all_failures():
 
 
 def test_call_vlm_succeeds_first_attempt():
-    reader = BaseDocReader()
+    reader = _ConcreteReader()
     mock_client = MagicMock()
     mock_client.generate.return_value = {"doc_type": "unknown", "fields": []}
     result = reader.call_vlm("prompt", None, mock_client)

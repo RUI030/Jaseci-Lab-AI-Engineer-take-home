@@ -1,28 +1,25 @@
 from __future__ import annotations
 
 import json
-import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Any
 
 import yaml
 from langgraph.graph import END, StateGraph
-from langgraph.graph.message import add_messages
 from typing_extensions import TypedDict
 
 from core.chatbot import Chatbot
-from core.doc_reader import DocReaderFactory
+from core.doc_reader import get_doc_reader, _hash_file  # D1: factory fn; R2: renamed hash helper
 from core.llm_adapters import BaseLLMClient, LLMClientFactory
 from core.models import (
     Claim,
     ConversationRound,
     DocRecord,
-    ExtractedField,
     FieldSchema,
     PriorityRecord,
 )
-from core.parser import ClaimParser
+from core.parser import REQUIRED_DOC_TYPES, ClaimParser
 
 
 def _load_yaml(relative_path: str) -> dict:
@@ -32,14 +29,10 @@ def _load_yaml(relative_path: str) -> dict:
 
 
 def _load_field_schemas() -> list[FieldSchema]:
+    # R1: import json moved to module top
     base = Path(__file__).parent.parent
     data = json.loads((base / "config" / "field_schema.json").read_text())
     return [FieldSchema(**item) for item in data]
-
-
-def _sha256_of(path: str) -> str:
-    import hashlib
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
 # --- LangGraph state ---
@@ -63,9 +56,7 @@ def node_parse_documents(state: ClaimState) -> ClaimState:
     folder = Path(state["folder_path"])
     schemas = state["field_schemas"]
     client: BaseLLMClient = state["llm_client"]
-    parser: ClaimParser = state["parser"]
 
-    # Collect all non-hidden files
     files = sorted(
         p for p in folder.iterdir()
         if p.is_file() and not p.name.startswith(".")
@@ -73,6 +64,10 @@ def node_parse_documents(state: ClaimState) -> ClaimState:
 
     seen_hashes: dict[str, str] = {}  # hash -> file_name
     seen_names: dict[str, str] = {}   # name -> file_path
+
+    # H2: track required types that were attempted but may have failed to parse,
+    # so the missing-placeholder loop does not double-count them as "missing".
+    attempted_required_types: set[str] = set()
 
     for file_path in files:
         file_name = file_path.name
@@ -95,7 +90,7 @@ def node_parse_documents(state: ClaimState) -> ClaimState:
 
         # --- compute hash for same-content detection ---
         try:
-            content_hash = _sha256_of(str(file_path))
+            content_hash = _hash_file(str(file_path))
         except Exception:
             content_hash = None
 
@@ -121,9 +116,16 @@ def node_parse_documents(state: ClaimState) -> ClaimState:
 
         # --- read the document ---
         try:
-            reader = DocReaderFactory.get_reader(str(file_path))
+            reader = get_doc_reader(str(file_path))
             record = reader.read(str(file_path), schemas, client)
-        except (ValueError, Exception) as exc:
+            if record.doc_type in REQUIRED_DOC_TYPES:
+                attempted_required_types.add(record.doc_type)
+        except Exception as exc:  # L4: ValueError ⊂ Exception, single catch is enough
+            # Use filename to infer intended required type before discarding it
+            for req_type in REQUIRED_DOC_TYPES:
+                if req_type in file_name.lower().replace("-", "_"):
+                    attempted_required_types.add(req_type)
+                    break
             record = DocRecord(
                 file_name=file_name,
                 doc_type="unknown",
@@ -136,21 +138,25 @@ def node_parse_documents(state: ClaimState) -> ClaimState:
         claim.doc_table.append(record)
 
     # --- merge extracted_fields (highest confidence wins per field) ---
-    CONFIDENCE_RANK = {"high": 3, "medium": 2, "low": 1}
+    confidence_rank = {"high": 3, "medium": 2, "low": 1}  # L16: lowercase local var
     for record in claim.doc_table:
         for field in record.fields:
             existing = claim.extracted_fields.get(field.field_name)
             if existing is None:
                 claim.extracted_fields[field.field_name] = field
-            elif CONFIDENCE_RANK.get(field.confidence, 0) > CONFIDENCE_RANK.get(
+            elif confidence_rank.get(field.confidence, 0) > confidence_rank.get(
                 existing.confidence, 0
             ):
                 claim.extracted_fields[field.field_name] = field
 
     # --- placeholder DocRecords for missing required docs ---
-    required_types = {"police_report", "finance_agreement", "settlement_breakdown"}
-    present_types = {r.doc_type for r in claim.doc_table if r.doc_status == "present"}
-    for doc_type in required_types - present_types:
+    # H2: only mark as missing if the type was neither successfully parsed
+    # nor attempted (attempted-but-parse_failed is handled by rule #6).
+    present_types = {
+        r.doc_type for r in claim.doc_table
+        if r.doc_status == "present" and r.parse_status == "complete"
+    }
+    for doc_type in set(REQUIRED_DOC_TYPES) - present_types - attempted_required_types:
         claim.doc_table.append(
             DocRecord(
                 file_name=f"[missing] {doc_type}",
@@ -225,11 +231,9 @@ def _build_customer_message(claim: Claim, message_config: dict) -> str:
         tmpl = templates.get("pending_review", "Claim {claim_id} is under review.")
         parts.append(tmpl.format(claim_id=claim.claim_id))
 
-    return "\n\n---\n\n".join(parts) if parts else (
-        templates.get("complete", "Claim {claim_id} is complete.").format(
-            claim_id=claim.claim_id
-        )
-    )
+    # M2: the "complete" fallback is unreachable — this node only fires for
+    # incomplete/pending claims, so parts is always non-empty here.
+    return "\n\n---\n\n".join(parts)
 
 
 def node_generate_message(state: ClaimState) -> ClaimState:
@@ -259,11 +263,13 @@ def node_accept_reply(state: ClaimState) -> ClaimState:
     client: BaseLLMClient = state["llm_client"]
 
     reply_text = chatbot.ask("\nPlease type the customer's reply (or press Enter to skip): ")
+    skipped = True
     if reply_text.strip():
-        parser.handle_reply(claim, reply_text, client)
-        state["reply_skipped"] = False
-    else:
-        state["reply_skipped"] = True
+        parser.handle_reply(claim, reply_text, client, state["field_schemas"])
+        skipped = False
+    # M5: set reply_skipped explicitly before returning so LangGraph sees the update
+    # regardless of whether it treats the returned dict as a merge or reference.
+    state["reply_skipped"] = skipped
     return state
 
 
@@ -283,6 +289,32 @@ def _route_after_reply(state: ClaimState) -> str:
     if claim.reply_count < max_rounds:
         return "cross_validate"
     return END
+
+
+# --- H6 + L9: express eligibility and single-pass prioritization ---
+
+def _is_express_eligible(claim: Claim) -> bool:
+    """Return True when the claim qualifies for express routing.
+
+    Requires fewer than 2 unresolved issues AND no missing-doc placeholders.
+    Missing docs are excluded because they represent absent required files, not
+    customer-fixable issues that express routing is designed for.
+    """
+    return (
+        sum(1 for vi in claim.validation_issues if not vi.resolved) < 2
+        and not any(r.doc_status == "missing" for r in claim.doc_table)
+    )
+
+
+def _priority_key(claim: Claim) -> int:
+    """Return sort key for prioritize_claims (lower = higher priority)."""
+    if claim.status == "complete":
+        return 0
+    if claim.status == "incomplete" and _is_express_eligible(claim):
+        return 1
+    if claim.status == "incomplete":
+        return 2
+    return 3  # pending
 
 
 class ClaimAgent:
@@ -356,57 +388,26 @@ class ClaimAgent:
 
         return final_claim
 
-    def accept_reply(self, claim: Claim) -> Claim:
-        """Standalone entry point for async/webhook reply handling."""
-        reply_text = self.chatbot.ask(
-            f"\nReply for claim {claim.claim_id} (or Enter to skip): "
-        )
-        if reply_text.strip():
-            ClaimParser().handle_reply(claim, reply_text, self.llm_client)
-        return claim
-
     def prioritize_claims(self, claims: list[Claim]) -> list[PriorityRecord]:
-        """Sort claims by status priority, then by upload time; assign express flag."""
+        """Sort claims by status priority then upload time; assign express flag.
+
+        Priority groups (lowest number = highest priority):
+          0 complete → 1 incomplete-express → 2 incomplete-standard → 3 pending
+        Within each group, oldest upload_at wins.
+        """
         priority_reasons = self.message_config.get("priority_reason", {})
-        STATUS_ORDER = {"complete": 0, "incomplete": 1, "pending": 2}
 
-        complete = sorted(
-            [c for c in claims if c.status == "complete"],
-            key=lambda c: c.uploaded_at,
-        )
-        incomplete_all = sorted(
-            [c for c in claims if c.status == "incomplete"],
-            key=lambda c: c.uploaded_at,
-        )
-        pending = sorted(
-            [c for c in claims if c.status == "pending"],
-            key=lambda c: c.uploaded_at,
-        )
-
-        incomplete_express = [
-            c for c in incomplete_all
-            if sum(1 for vi in c.validation_issues if not vi.resolved) < 2
-        ]
-        incomplete_standard = [
-            c for c in incomplete_all
-            if c not in incomplete_express
-        ]
-
-        ordered = (
-            [(c, False) for c in complete]
-            + [(c, True) for c in incomplete_express]
-            + [(c, False) for c in incomplete_standard]
-            + [(c, False) for c in pending]
-        )
+        ordered = sorted(claims, key=lambda c: (_priority_key(c), c.uploaded_at))
 
         records: list[PriorityRecord] = []
-        for rank, (claim, express) in enumerate(ordered, start=1):
+        for rank, claim in enumerate(ordered, start=1):
+            express = claim.status == "incomplete" and _is_express_eligible(claim)
             if claim.status == "complete":
                 reason = priority_reasons.get(
                     "complete_oldest",
                     "All documents present and valid — ready to finalize.",
                 )
-            elif claim.status == "incomplete" and express:
+            elif express:
                 reason = priority_reasons.get(
                     "incomplete_express",
                     "Express routing — fewer than 2 unresolved issues.",

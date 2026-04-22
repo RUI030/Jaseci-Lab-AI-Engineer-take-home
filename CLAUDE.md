@@ -25,7 +25,7 @@ python main.py --all
 pytest tests/ -v
 
 # Unit tests only (skip integration)
-pytest tests/ -v -k "not integration"
+pytest tests/ -v -m "not integration"
 
 # Integration tests (requires GEMINI_API_KEY in .env)
 pytest tests/integration/ -v -m integration
@@ -60,7 +60,7 @@ LLMAdapters    (core/llm_adapters.py)— Gemini and Qwen clients behind BaseLLMC
 - Conditional after reply: if not skipped and under max rounds → `cross_validate` again; else END
 - Routing is deterministic/conditional, not LLM-driven (compliance requirement)
 
-**DocReader dispatch** (`DocReaderFactory.get_reader`): selects `PDFReader`, `ImageReader`, or `TextReader` by file extension. `PDFReader` falls back to `ImageReader` when extracted text is below `pdf_text_threshold` (set in `config/settings.yaml`).
+**DocReader dispatch** (`get_doc_reader`): selects `PDFReader`, `ImageReader`, or `TextReader` by file extension. `PDFReader` falls back to `ImageReader` when extracted text is below `pdf_text_threshold` (set in `config/settings.yaml`).
 
 **Field extraction flow**: Each `DocReader` calls the LLM with a structured prompt and expects a JSON response matching `_ExtractionResponse`. Fields are merged into `Claim.extracted_fields` — highest confidence wins per field name across all documents.
 

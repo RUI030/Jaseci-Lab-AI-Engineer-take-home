@@ -21,7 +21,6 @@ load_dotenv()
 
 
 def _print_claim_summary(claim) -> None:
-    data = json.loads(claim.model_dump_json(indent=2))
     print(f"\n{'='*60}")
     print(f"  {claim.claim_id}  |  status: {claim.status.upper()}")
     print(f"{'='*60}")
@@ -56,7 +55,8 @@ def _print_claim_summary(claim) -> None:
         for cr in claim.conversation_log:
             direction_tag = "→ OUT" if cr.direction == "outbound" else "← IN"
             preview = cr.message[:80].replace("\n", " ")
-            print(f"  Round {cr.round} {direction_tag}: {preview}...")
+            suffix = "..." if len(cr.message) > 80 else ""
+            print(f"  Round {cr.round} {direction_tag}: {preview}{suffix}")
 
     print()
 

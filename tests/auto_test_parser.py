@@ -283,11 +283,11 @@ def test_compare_fields_new_field_treated_as_consistent():
     assert results["date_of_loss"] == "consistent"
 
 
-# --- log_reply ---
+# --- record_reply ---
 
-def test_log_reply_appends_round_and_increments_count():
+def test_record_reply_appends_round_and_increments_count():
     claim = _make_claim()
-    parser.log_reply(claim, "My VIN is 1HGCM82633A004352", {"VIN": "consistent"})
+    parser.record_reply(claim, "My VIN is 1HGCM82633A004352", {"VIN": "consistent"})
     assert claim.reply_count == 1
     assert len(claim.conversation_log) == 1
     round_ = claim.conversation_log[0]
@@ -296,10 +296,10 @@ def test_log_reply_appends_round_and_increments_count():
     assert round_.round == 1
 
 
-def test_log_reply_multiple_rounds():
+def test_record_reply_multiple_rounds():
     claim = _make_claim()
-    parser.log_reply(claim, "First reply", {})
-    parser.log_reply(claim, "Second reply", {"date_of_loss": "inconsistent"})
+    parser.record_reply(claim, "First reply", {})
+    parser.record_reply(claim, "Second reply", {"date_of_loss": "inconsistent"})
     assert claim.reply_count == 2
     assert claim.conversation_log[1].round == 2
 
@@ -322,7 +322,7 @@ def test_handle_reply_consistent_reply_keeps_incomplete():
         ]
         MockTextReader.return_value.read.return_value = mock_record
 
-        result = parser.handle_reply(claim, "My VIN is 1HGCM82633A004352", mock_client)
+        result = parser.handle_reply(claim, "My VIN is 1HGCM82633A004352", mock_client, [])
 
     assert result.reply_count == 1
     assert len(result.conversation_log) == 1
@@ -348,7 +348,7 @@ def test_handle_reply_inconsistent_adds_validation_issue():
         ]
         MockTextReader.return_value.read.return_value = mock_record
 
-        result = parser.handle_reply(claim, "My VIN is DIFFERENTVIN000000", mock_client)
+        result = parser.handle_reply(claim, "My VIN is DIFFERENTVIN000000", mock_client, [])
 
     inconsistencies = [
         vi for vi in result.validation_issues

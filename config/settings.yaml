@@ -1,4 +1,4 @@
-model_id: "qwen_local" # choose which model to use: "gemini" or "qwen_local"
+model_id: "qwen_local"  # choose: "gemini", "qwen", or "qwen_local"
 
 pdf_text_threshold: 100  # characters; below this PDFReader falls back to ImageReader
 

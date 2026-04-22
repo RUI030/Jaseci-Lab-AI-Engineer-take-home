@@ -1,7 +1,9 @@
 """
 End-to-end integration tests.
 
-These tests require a real GEMINI_API_KEY and make live API calls.
+These tests use a mocked LLM adapter — no real API key is required.
+They exercise the full LangGraph pipeline (parse → validate → message → reply)
+end-to-end with controlled responses.
 Run with:  pytest tests/integration/ -v -m integration
 
 They are excluded from the default test run.

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import tempfile
 import time
+from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Literal
 
@@ -14,13 +15,21 @@ from core.llm_adapters import BaseLLMClient
 from core.models import DocRecord, ExtractedField, FieldSchema
 
 
-def _load_pdf_threshold() -> int:
-    path = Path(__file__).parent.parent / "config" / "settings.yaml"
-    with open(path) as f:
-        return yaml.safe_load(f).get("pdf_text_threshold", 100)
+# D3: Cache the threshold at module level — no reason to re-read YAML on every PDF parse.
+_PDF_TEXT_THRESHOLD: int | None = None
 
 
-def _sha256(path: str) -> str:
+def _pdf_text_threshold() -> int:
+    global _PDF_TEXT_THRESHOLD
+    if _PDF_TEXT_THRESHOLD is None:
+        path = Path(__file__).parent.parent / "config" / "settings.yaml"
+        with open(path) as f:
+            _PDF_TEXT_THRESHOLD = yaml.safe_load(f).get("pdf_text_threshold", 100)
+    return _PDF_TEXT_THRESHOLD
+
+
+# R2: Renamed _sha256 → _hash_file (callers want a content hash, not SHA-256 specifically)
+def _hash_file(path: str) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
@@ -56,12 +65,13 @@ _DOC_ROLE = {
 }
 
 
-def _build_prompt(target_fields: list[FieldSchema], context_note: str = "") -> str:
+# R3: Unified parameter name to `schemas` (was `target_fields`)
+def _build_prompt(schemas: list[FieldSchema], context_note: str = "") -> str:
     field_lines = "\n".join(
         f"  - {f.field_name} ({f.data_type}): {f.description}\n"
         f"    Validation: {f.validation_rule}\n"
         f"    Unify instruction: {f.unify_instruction}"
-        for f in target_fields
+        for f in schemas
     )
     context_block = f"\nContext: {context_note}\n" if context_note else ""
     return (
@@ -83,9 +93,9 @@ def _build_prompt(target_fields: list[FieldSchema], context_note: str = "") -> s
 def _response_to_extracted_fields(
     response: dict,
     source_trust: Literal["document", "user_input"],
-    field_schemas: list[FieldSchema],
+    schemas: list[FieldSchema],
 ) -> list[ExtractedField]:
-    schema_map = {s.field_name: s for s in field_schemas}
+    schema_map = {s.field_name: s for s in schemas}
     result: list[ExtractedField] = []
     for item in response.get("fields", []):
         schema = schema_map.get(item["field_name"])
@@ -110,7 +120,7 @@ def _response_to_extracted_fields(
 
 # --- Base ---
 
-class BaseDocReader:
+class BaseDocReader(ABC):
     def call_vlm(
         self,
         prompt: str,
@@ -124,21 +134,38 @@ class BaseDocReader:
                 time.sleep(delay)
             try:
                 return client.generate(prompt, _ExtractionResponse, files=files)
-            except ParseFailedError as exc:
-                last_exc = exc
-            except Exception as exc:
+            except Exception as exc:  # T1: ParseFailedError ⊂ Exception; both branches did the same thing
                 last_exc = exc
         raise ParseFailedError(
             f"VLM call failed after {len(delays)} attempts: {last_exc}"
         ) from last_exc
 
+    # T2: shared helper — eliminates copy-pasted DocRecord construction across all three readers
+    def _failed_record(
+        self,
+        file_path: str,
+        exc: Exception,
+        content_hash: str | None = None,
+        raw_text: str | None = None,
+    ) -> DocRecord:
+        return DocRecord(
+            file_name=Path(file_path).name,
+            doc_type="unknown",
+            doc_role="other",
+            source_trust="document",
+            parse_status="parse_failed",
+            status_reason=str(exc),
+            content_hash=content_hash,
+            raw_text=raw_text,
+        )
+
+    @abstractmethod  # D2: enforce subclass contract via ABC instead of pragma: no cover
     def read(
         self,
         file_path: str,
-        target_fields: list[FieldSchema],
+        schemas: list[FieldSchema],
         client: BaseLLMClient,
-    ) -> DocRecord:  # pragma: no cover
-        raise NotImplementedError
+    ) -> DocRecord: ...
 
 
 # --- PDF ---
@@ -147,18 +174,18 @@ class PDFReader(BaseDocReader):
     def read(
         self,
         file_path: str,
-        target_fields: list[FieldSchema],
+        schemas: list[FieldSchema],
         client: BaseLLMClient,
     ) -> DocRecord:
         import pdfplumber
 
-        threshold = _load_pdf_threshold()
+        threshold = _pdf_text_threshold()
         status_reason: str | None = None
 
         with pdfplumber.open(file_path) as pdf:
             text = "\n".join(p.extract_text() or "" for p in pdf.pages)
 
-        content_hash = _sha256(file_path)
+        content_hash = _hash_file(file_path)
 
         if len(text.strip()) < threshold:
             status_reason = (
@@ -166,28 +193,19 @@ class PDFReader(BaseDocReader):
                 f"({threshold}); falling back to ImageReader."
             )
             reader = ImageReader()
-            record = reader.read(file_path, target_fields, client)
+            record = reader.read(file_path, schemas, client)
             record.status_reason = status_reason
             record.content_hash = content_hash
             return record
 
-        prompt = _build_prompt(target_fields, context_note="This is a machine-readable PDF.")
+        prompt = _build_prompt(schemas, context_note="This is a machine-readable PDF.")
         try:
             response = self.call_vlm(prompt, files=[file_path], client=client)
             parse_status = "complete"
         except ParseFailedError as exc:
-            return DocRecord(
-                file_name=Path(file_path).name,
-                doc_type="unknown",
-                doc_role="other",
-                source_trust="document",
-                parse_status="parse_failed",
-                status_reason=str(exc),
-                content_hash=content_hash,
-                raw_text=text,
-            )
+            return self._failed_record(file_path, exc, content_hash, text)
 
-        fields = _response_to_extracted_fields(response, "document", target_fields)
+        fields = _response_to_extracted_fields(response, "document", schemas)
         doc_type = response.get("doc_type", "unknown")
         return DocRecord(
             file_name=Path(file_path).name,
@@ -219,9 +237,9 @@ class ImageReader(BaseDocReader):
             return file_path
 
         angle = cv2.minAreaRect(coords)[-1]
-        # minAreaRect returns angles in [-90, 0); correct to [-45, 45)
-        if angle < -45:
-            angle = 90 + angle
+        # OpenCV ≥ 4.5 returns minAreaRect angles in [0, 90); map to [-45, 45)
+        if angle > 45:
+            angle = angle - 90
 
         if abs(angle) < 1.0:
             return file_path
@@ -233,37 +251,31 @@ class ImageReader(BaseDocReader):
 
         suffix = Path(file_path).suffix
         tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
-        cv2.imwrite(tmp.name, rotated)
-        return tmp.name
+        tmp_name = tmp.name
+        tmp.close()  # close handle before cv2 writes to the path
+        cv2.imwrite(tmp_name, rotated)
+        return tmp_name
 
     def read(
         self,
         file_path: str,
-        target_fields: list[FieldSchema],
+        schemas: list[FieldSchema],
         client: BaseLLMClient,
     ) -> DocRecord:
-        content_hash = _sha256(file_path)
+        content_hash = _hash_file(file_path)
         processed_path = self.preprocess(file_path)
 
         prompt = _build_prompt(
-            target_fields,
+            schemas,
             context_note="This is a scanned image — OCR may have errors. Confidence should be at most medium.",
         )
         try:
             response = self.call_vlm(prompt, files=[processed_path], client=client)
             parse_status = "complete"
         except ParseFailedError as exc:
-            return DocRecord(
-                file_name=Path(file_path).name,
-                doc_type="unknown",
-                doc_role="other",
-                source_trust="document",
-                parse_status="parse_failed",
-                status_reason=str(exc),
-                content_hash=content_hash,
-            )
+            return self._failed_record(file_path, exc, content_hash)
 
-        fields = _response_to_extracted_fields(response, "document", target_fields)
+        fields = _response_to_extracted_fields(response, "document", schemas)
         # cap confidence at medium for image sources
         for f in fields:
             if f.confidence == "high":
@@ -290,15 +302,15 @@ class TextReader(BaseDocReader):
     def read(
         self,
         file_path: str,
-        target_fields: list[FieldSchema],
+        schemas: list[FieldSchema],
         client: BaseLLMClient,
     ) -> DocRecord:
         content = Path(file_path).read_text(encoding="utf-8", errors="replace")
-        content_hash = _sha256(file_path)
+        content_hash = _hash_file(file_path)
 
         wrapped = f"<document>\n{content}\n</document>"
         prompt = _build_prompt(
-            target_fields,
+            schemas,
             context_note="This is a plain-text customer communication wrapped in XML tags.",
         )
         full_prompt = f"{prompt}\n\nDocument content:\n{wrapped}"
@@ -307,19 +319,10 @@ class TextReader(BaseDocReader):
             response = self.call_vlm(full_prompt, files=None, client=client)
             parse_status = "complete"
         except ParseFailedError as exc:
-            return DocRecord(
-                file_name=Path(file_path).name,
-                doc_type="customer_reply",
-                doc_role="optional",
-                source_trust="document",
-                parse_status="parse_failed",
-                status_reason=str(exc),
-                content_hash=content_hash,
-                raw_text=content,
-            )
+            return self._failed_record(file_path, exc, content_hash, content)
 
-        fields = _response_to_extracted_fields(response, "document", target_fields)
-        doc_type = response.get("doc_type", "customer_reply")
+        fields = _response_to_extracted_fields(response, "document", schemas)
+        doc_type = response.get("doc_type", "unknown")
         return DocRecord(
             file_name=Path(file_path).name,
             doc_type=doc_type,
@@ -332,16 +335,13 @@ class TextReader(BaseDocReader):
         )
 
 
-# --- Factory ---
-
-class DocReaderFactory:
-    @staticmethod
-    def get_reader(file_path: str) -> BaseDocReader:
-        suffix = Path(file_path).suffix.lower()
-        if suffix == ".pdf":
-            return PDFReader()
-        if suffix in {".png", ".jpg", ".jpeg"}:
-            return ImageReader()
-        if suffix == ".txt":
-            return TextReader()
-        raise ValueError(f"Unsupported file type: '{suffix}' ({file_path})")
+# D1: Module-level function replaces DocReaderFactory class (single static method is a Java-ism)
+def get_doc_reader(file_path: str) -> BaseDocReader:
+    suffix = Path(file_path).suffix.lower()
+    if suffix == ".pdf":
+        return PDFReader()
+    if suffix in {".png", ".jpg", ".jpeg"}:
+        return ImageReader()
+    if suffix == ".txt":
+        return TextReader()
+    raise ValueError(f"Unsupported file type: '{suffix}' ({file_path})")

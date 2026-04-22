@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import json
+import os
 import tempfile
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Literal
 
 from core.doc_reader import TextReader
@@ -103,11 +102,16 @@ class ClaimParser:
         ):
             return "pending"
 
-        unresolved_inconsistencies = [
-            vi
-            for vi in claim.validation_issues
-            if vi.issue_type == "inconsistency" and not vi.resolved
-        ]
+        # Single pass over validation_issues for all unresolved types
+        unresolved_inconsistencies = []
+        low_conf_issues = []
+        for vi in claim.validation_issues:
+            if vi.resolved:
+                continue
+            if vi.issue_type == "inconsistency":
+                unresolved_inconsistencies.append(vi)
+            elif vi.issue_type == "low_confidence":
+                low_conf_issues.append(vi)
 
         # 4/5. Inconsistency — incomplete before first reply, pending after
         if unresolved_inconsistencies:
@@ -122,11 +126,6 @@ class ClaimParser:
             return "pending"
 
         # 8. Unresolved low-confidence required field
-        low_conf_issues = [
-            vi
-            for vi in claim.validation_issues
-            if vi.issue_type == "low_confidence" and not vi.resolved
-        ]
         if low_conf_issues:
             return "pending"
 
@@ -135,7 +134,11 @@ class ClaimParser:
             if field.field_role == "required" and field.confidence == "low":
                 return "pending"
 
-        # 9. Check missing required docs (via check_required_docs helper)
+        # 9. Defensive check for required docs absent from doc_table entirely.
+        # D5: Step 1 already catches doc_status == "missing" placeholders, which
+        # node_parse_documents always inserts for required types not found on disk.
+        # This step only fires if a required type somehow has no record at all
+        # (e.g., if a caller bypassed node_parse_documents). Kept as a safety net.
         missing = self.check_required_docs(claim)
         if missing:
             return "incomplete"
@@ -157,20 +160,30 @@ class ClaimParser:
         # Fallback: something unresolved
         return "incomplete"
 
-    def parse_reply(
+    def extract_reply_fields(
         self,
         reply_text: str,
-        target_fields: list[FieldSchema],
+        schemas: list[FieldSchema],
         client: BaseLLMClient,
     ) -> list[ExtractedField]:
-        """Parse a customer reply via TextReader; hard-cap source_trust and confidence."""
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".txt", delete=False, encoding="utf-8"
-        ) as tmp:
-            tmp.write(reply_text)
-            tmp_path = tmp.name
+        """Extract fields from a customer reply; hard-cap source_trust and confidence.
 
-        record = TextReader().read(tmp_path, target_fields, client)
+        R1: import os moved to module top.
+        R2: renamed parse_reply → extract_reply_fields (does field extraction, not just parsing).
+        R3: parameter renamed target_fields → schemas.
+        """
+        # R1: os imported at module top
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".txt", delete=False, encoding="utf-8"
+            ) as tmp:
+                tmp.write(reply_text)
+                tmp_path = tmp.name
+            record = TextReader().read(tmp_path, schemas, client)
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                os.unlink(tmp_path)
         fields = record.fields
 
         # Override trust and confidence for all fields from customer replies
@@ -197,10 +210,7 @@ class ClaimParser:
         results: dict[str, Literal["consistent", "inconsistent"]] = {}
         for field in new_fields:
             existing = claim.extracted_fields.get(field.field_name)
-            if existing is None or existing.unified_value is None:
-                results[field.field_name] = "consistent"
-                continue
-            if field.unified_value is None:
+            if existing is None or existing.unified_value is None or field.unified_value is None:
                 results[field.field_name] = "consistent"
                 continue
             if existing.unified_value == field.unified_value:
@@ -209,13 +219,16 @@ class ClaimParser:
                 results[field.field_name] = "inconsistent"
         return results
 
-    def log_reply(
+    def record_reply(
         self,
         claim: Claim,
         message: str,
         compare_results: dict[str, Literal["consistent", "inconsistent"]],
     ) -> None:
-        """Append an inbound ConversationRound and increment reply_count."""
+        """Append an inbound ConversationRound and increment reply_count.
+
+        R2: renamed log_reply → record_reply ("log" implies a logger; this appends to the conversation list).
+        """
         claim.reply_count += 1
         claim.conversation_log.append(
             ConversationRound(
@@ -232,27 +245,24 @@ class ClaimParser:
         claim: Claim,
         reply_text: str,
         client: BaseLLMClient,
+        schemas: list[FieldSchema],
     ) -> Claim:
-        """Orchestrate reply processing: parse → compare → log → determine status."""
-        # Load field schemas scoped to unresolved issues
-        schema_path = Path(__file__).parent.parent / "config" / "field_schema.json"
-        all_schemas = [
-            FieldSchema(**item)
-            for item in json.loads(schema_path.read_text())
-        ]
+        """Orchestrate reply processing: extract fields → compare → record → determine status.
 
+        R3: parameter renamed field_schemas → schemas for consistency.
+        """
         unresolved_fields = {
             vi.field_name
             for vi in claim.validation_issues
             if not vi.resolved and vi.field_name
         }
-        target_fields = (
-            [s for s in all_schemas if s.field_name in unresolved_fields]
+        focused_schemas = (
+            [s for s in schemas if s.field_name in unresolved_fields]
             if unresolved_fields
-            else all_schemas
+            else schemas
         )
 
-        new_fields = self.parse_reply(reply_text, target_fields, client)
+        new_fields = self.extract_reply_fields(reply_text, focused_schemas, client)
         compare_results = self.compare_fields(claim, new_fields)
 
         # Add ValidationIssue for any new inconsistencies introduced by the reply
@@ -280,12 +290,12 @@ class ClaimParser:
                             ),
                             sources=["document", "user_input"],
                             values={
-                                "document": existing.unified_value if existing else "",
+                                "document": (existing.unified_value or "") if existing else "",
                                 "user_input": new_val or "",
                             },
                         )
                     )
 
-        self.log_reply(claim, reply_text, compare_results)
+        self.record_reply(claim, reply_text, compare_results)
         claim.status = self.determine_status(claim)
         return claim

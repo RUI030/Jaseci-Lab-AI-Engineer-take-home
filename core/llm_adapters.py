@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import base64
 import json
+import mimetypes
 import os
 import time
 from abc import ABC, abstractmethod
@@ -131,9 +133,7 @@ class QwenAdapter(BaseLLMClient):
         response_schema: type[BaseModel],
         files: list[str] | None = None,
     ) -> dict:
-        import base64
-        import mimetypes
-
+        # R1: base64 and mimetypes imported at module top
         messages: list[dict] = []
         if files:
             content_parts: list[dict] = []
@@ -209,8 +209,10 @@ class QwenLocalAdapter(BaseLLMClient):
                             for page in pdf.pages:
                                 img = page.to_image(resolution=150).original
                                 content.append({"type": "image", "image": img.convert("RGB")})
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        raise ParseFailedError(
+                            f"Failed to render PDF pages for local model: {exc}"
+                        ) from exc
         content.append({"type": "text", "text": prompt})
         return [{"role": "user", "content": content}]
 
@@ -243,12 +245,10 @@ class QwenLocalAdapter(BaseLLMClient):
         ).to(self._model.device)
 
         do_sample = self._temperature > 0.0
-        output_ids = self._model.generate(
-            **inputs,
-            max_new_tokens=1024,
-            do_sample=do_sample,
-            temperature=self._temperature if do_sample else None,
-        )
+        gen_kwargs: dict = {"max_new_tokens": 1024, "do_sample": do_sample}
+        if do_sample:
+            gen_kwargs["temperature"] = self._temperature
+        output_ids = self._model.generate(**inputs, **gen_kwargs)
         # Strip input tokens from output
         trimmed = [
             out[len(inp):]
@@ -258,12 +258,11 @@ class QwenLocalAdapter(BaseLLMClient):
             trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
         )[0].strip()
 
-        # Strip markdown code fences if present
+        # Strip markdown code fences if present (handles ```json, ```jsonc, etc.)
         if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-            raw = raw.strip()
+            lines = raw.splitlines()
+            inner = lines[1:-1] if lines and lines[-1].strip() == "```" else lines[1:]
+            raw = "\n".join(inner).strip()
 
         try:
             return json.loads(raw)
