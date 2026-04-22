@@ -86,6 +86,7 @@ class Claim(BaseModel):
     extracted_fields: dict[str, ExtractedField] = Field(default_factory=dict)
     validation_issues: list[ValidationIssue] = Field(default_factory=list)
     conversation_log: list[ConversationRound] = Field(default_factory=list)
+    conversation_summary: str = ""
     tools_used: list[dict] = Field(default_factory=list)
     # each entry: {"tool": "<name>", "input": {...}, "result": {...}}
 

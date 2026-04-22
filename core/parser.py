@@ -593,3 +593,101 @@ class ClaimParser:
 
         issues_body = "\n\n".join(f"{i + 1}. {line}" for i, line in enumerate(issue_lines))
         return email_tmpl.format(claim_id=claim.claim_id, issues_body=issues_body).strip()
+
+    def update_conversation_summary(
+        self, claim: Claim, llm_client: BaseLLMClient, message_config: dict
+    ) -> None:
+        """Regenerate the conversation summary after a new customer reply is received."""
+        guideline_tmpl = message_config.get("conversation_summary_guideline")
+        if not guideline_tmpl:
+            return
+        inbound = [r for r in claim.conversation_log if r.direction == "inbound"]
+        if not inbound:
+            return
+        last = inbound[-1]
+        current = claim.conversation_summary or "(no prior summary — this is the first reply)"
+        prompt = guideline_tmpl.format(
+            claim_id=claim.claim_id,
+            current_summary=current,
+            round=last.round,
+            reply_text=last.message,
+        )
+        try:
+            result = llm_client.generate_text(prompt)
+            if isinstance(result, str) and result.strip():
+                claim.conversation_summary = result.strip()
+        except Exception:
+            pass  # summary is best-effort; claim processing continues either way
+
+    def build_customer_message_llm(
+        self, claim: Claim, llm_client: BaseLLMClient, message_config: dict
+    ) -> str:
+        """Compose a customer email using LLM guided by claim state context and guidelines."""
+        guideline_tmpl = message_config.get("customer_message_guideline")
+        if not guideline_tmpl:
+            raise KeyError("messages.yaml is missing 'customer_message_guideline'")
+        context = self._build_claim_context(claim)
+        prompt = guideline_tmpl.format(claim_context=context)
+        return llm_client.generate_text(prompt).strip()
+
+    @staticmethod
+    def _build_claim_context(claim: Claim) -> str:
+        """Assemble a human-readable claim state summary to feed into the LLM message prompt."""
+        lines = [f"Claim ID: {claim.claim_id}"]
+
+        # Prefer the running summary for context; fall back to raw last message if no summary yet
+        if claim.conversation_summary:
+            lines.append(f"\nConversation summary (what the customer has told us so far):\n  {claim.conversation_summary}")
+        else:
+            inbound = [r for r in claim.conversation_log if r.direction == "inbound"]
+            if inbound:
+                last = inbound[-1]
+                preview = last.message[:400].strip()
+                if len(last.message) > 400:
+                    preview += "..."
+                lines.append(f'\nCustomer\'s most recent reply (round {last.round}):\n  "{preview}"')
+            else:
+                lines.append("\nNo previous customer contact — this is the first outreach.")
+
+        # Document status
+        lines.append("\nDocument status:")
+        for r in claim.doc_table:
+            if r.doc_type == "customer_reply":
+                continue  # already captured above
+            if r.doc_status == "missing":
+                lines.append(f"  MISSING (required): {r.doc_type}")
+            elif r.parse_status == "parse_failed":
+                lines.append(f"  UNREADABLE: {r.file_name} — ask customer to re-submit a clear copy")
+            elif r.doc_type == "unknown":
+                lines.append(f"  UNRECOGNISED: {r.file_name} — document type could not be determined")
+            else:
+                lines.append(f"  OK: {r.file_name} ({r.doc_type})")
+
+        # Actionable issues
+        actionable = [vi for vi in claim.validation_issues if not vi.resolved]
+        if actionable:
+            lines.append("\nIssues requiring customer action:")
+            for i, vi in enumerate(actionable, 1):
+                if vi.severity == "blocking":
+                    if vi.resubmit_doc:
+                        lines.append(
+                            f"  {i}. Field '{vi.field_name}' discrepancy — "
+                            f"'{vi.resubmit_doc}' appears unreliable; ask customer to re-submit it"
+                        )
+                    else:
+                        values_detail = ""
+                        if vi.values:
+                            values_detail = " Values: " + "; ".join(
+                                f"{doc}: {val}" for doc, val in vi.values.items()
+                            )
+                        lines.append(
+                            f"  {i}. Field '{vi.field_name}' is inconsistent across documents.{values_detail} "
+                            f"Ask customer to confirm the correct value."
+                        )
+                else:
+                    lines.append(
+                        f"  {i}. Minor discrepancy in '{vi.field_name}' — "
+                        f"staff will handle; inform customer no action is needed from them."
+                    )
+
+        return "\n".join(lines)

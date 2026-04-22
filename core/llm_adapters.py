@@ -107,6 +107,10 @@ class BaseLLMClient(ABC):
     ) -> dict:
         """Call the VLM and return a parsed dict matching response_schema."""
 
+    @abstractmethod
+    def generate_text(self, prompt: str) -> str:
+        """Generate a plain-text response without JSON schema constraints."""
+
 
 class GeminiAdapter(BaseLLMClient):
     def __init__(self, model: str, temperature: float = 0.0) -> None:
@@ -173,6 +177,16 @@ class GeminiAdapter(BaseLLMClient):
     ) -> dict:
         return _with_retry(self._call_api, prompt, response_schema, files)
 
+    def generate_text(self, prompt: str) -> str:
+        def _call():
+            response = self._client.models.generate_content(
+                model=self._model_name,
+                contents=[prompt],
+                config=self._types.GenerateContentConfig(temperature=0.4),
+            )
+            return (response.text or "").strip()
+        return _with_retry(_call)
+
 
 class QwenAdapter(BaseLLMClient):
     def __init__(self, model: str, base_url: str, temperature: float = 0.0) -> None:
@@ -233,6 +247,16 @@ class QwenAdapter(BaseLLMClient):
         files: list[str] | None = None,
     ) -> dict:
         return _with_retry(self._call_api, prompt, response_schema, files)
+
+    def generate_text(self, prompt: str) -> str:
+        def _call():
+            response = self._client.chat.completions.create(
+                model=self._model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.4,
+            )
+            return (response.choices[0].message.content or "").strip()
+        return _with_retry(_call)
 
 
 class QwenLocalAdapter(BaseLLMClient):
@@ -334,6 +358,29 @@ class QwenLocalAdapter(BaseLLMClient):
             raise ParseFailedError(
                 f"QwenLocal returned malformed JSON: {exc}\nRaw output: {raw[:300]}"
             ) from exc
+
+    def generate_text(self, prompt: str) -> str:
+        from qwen_vl_utils import process_vision_info
+
+        messages = self._build_messages(prompt, None)
+        text = self._processor.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+        image_inputs, video_inputs = process_vision_info(messages)
+        inputs = self._processor(
+            text=[text],
+            images=image_inputs,
+            videos=video_inputs,
+            padding=True,
+            return_tensors="pt",
+        ).to(self._model.device)
+
+        gen_kwargs: dict = {"max_new_tokens": 512, "do_sample": True, "temperature": 0.4}
+        output_ids = self._model.generate(**inputs, **gen_kwargs)
+        trimmed = [out[len(inp):] for inp, out in zip(inputs.input_ids, output_ids)]
+        return self._processor.batch_decode(
+            trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
+        )[0].strip()
 
 
 class LLMClientFactory:

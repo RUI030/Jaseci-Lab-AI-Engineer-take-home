@@ -216,8 +216,15 @@ def node_generate_message(state: ClaimState) -> ClaimState:
     chatbot: Chatbot = state["chatbot"]
     message_config: dict = state["message_config"]
     parser: ClaimParser = state["parser"]
+    llm_client: BaseLLMClient = state["llm_client"]
 
-    message = parser.build_customer_message(claim, message_config)
+    try:
+        message = parser.build_customer_message_llm(claim, llm_client, message_config)
+        if not isinstance(message, str) or not message.strip():
+            raise ValueError("LLM returned empty or non-string message")
+    except Exception:
+        message = parser.build_customer_message(claim, message_config)
+
     chatbot.display(f"\n[Message to customer]\n{message}")
 
     claim.conversation_log.append(
@@ -248,6 +255,7 @@ def node_accept_reply(state: ClaimState) -> ClaimState:
     skipped = True
     if reply_text.strip():
         parser.handle_reply(claim, reply_text, client, state["field_schemas"])
+        parser.update_conversation_summary(claim, client, state["message_config"])
         skipped = False
     else:
         # Customer skipped — if any open resubmit request exists, treat as refusal → human review
