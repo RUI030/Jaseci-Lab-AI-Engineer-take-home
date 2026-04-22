@@ -12,7 +12,7 @@ Chatbot        (core/chatbot.py)      — IO only, no business logic
                     └── LLMAdapters (core/llm_adapters.py) — Gemini / Qwen clients
 ```
 
-Shared utilities (YAML loading, schema loading) live in `core/utils.py`. Named tool functions (`validate_vin`, `check_field_consistency`, `classify_document`) live in `core/tools.py` and are called conditionally by `ClaimAgent` and `ClaimParser`.
+Shared utilities (YAML loading, schema loading) live in `core/utils.py`. Named tool functions (`validate_vin`, `check_field_consistency`, `classify_document`) live in `core/tools.py` and are called conditionally by `ClaimAgent` and `ClaimParser`. Priority scheduling logic (sorting, express eligibility) lives in `core/scheduler.py` — stateless functions with no dependency on the LLM or graph.
 
 **Entry point assumption:** Input files are assumed to have been uploaded to a local claim folder before processing begins.
 
@@ -56,8 +56,10 @@ class Chatbot:
 - Entry → `parse_documents` → `cross_validate`
 - Conditional after `cross_validate`:
   - status is `incomplete` AND `reply_queue` is non-empty → `accept_reply` directly (customer already replied — process before sending anything)
-  - status is `incomplete` AND `reply_queue` is empty → `generate_message` → `accept_reply`
-  - status is `complete` or `needs_review` → END
+  - all other cases → `generate_message`
+- Conditional after `generate_message`:
+  - status is `incomplete` → `accept_reply`
+  - status is `complete` or `needs_review` → END (message sent, no reply loop)
 - Conditional after `accept_reply`: if reply was not skipped and under `max_reply_rounds` → `cross_validate` again; else END
 - Routing is deterministic/conditional, not LLM-driven (compliance requirement — insurance claim processing has well-defined states where unpredictable LLM-driven tool selection would be a liability)
 
@@ -76,7 +78,15 @@ class ClaimAgent:
     def __init__(self, chatbot: Chatbot) -> None
     def process_claim(self, folder_path: str, uploaded_at: str | None = None) -> Claim
     # uploaded_at: ISO 8601 string; falls back to folder mtime if None
-    def prioritize_claims(self, claims: list[Claim]) -> list[PriorityRecord]
+```
+
+Priority scheduling is handled by standalone functions in `core/scheduler.py` (no LLM dependency, callable without a `ClaimAgent` instance):
+
+```python
+# core/scheduler.py
+def prioritize_claims(claims: list[Claim], message_config: dict) -> list[PriorityRecord]
+def _is_express_eligible(claim: Claim) -> bool
+def _priority_key(claim: Claim) -> int
 ```
 
 **Graph nodes:**
@@ -85,10 +95,10 @@ class ClaimAgent:
 |------|------------------|
 | `parse_documents` | entry point |
 | `cross_validate` | after all documents parsed; also after each accepted reply |
-| `generate_message` | status is `incomplete` AND `reply_queue` is empty |
-| `accept_reply` | after `generate_message`; also directly from `cross_validate` when `reply_queue` is non-empty |
+| `generate_message` | all statuses (complete, incomplete, needs_review), UNLESS status is incomplete and reply_queue is non-empty |
+| `accept_reply` | after `generate_message` when status is `incomplete`; also directly from `cross_validate` when `reply_queue` is non-empty |
 
-**Customer message format:** `ClaimParser.build_customer_message_llm` composes the outbound email using an LLM guided by structured claim context and writing guidelines from `config/messages.yaml`. The context includes: document status, our best-guess value for each flagged field, and a running `conversation_summary` of what the customer has previously told us. If the LLM call fails, `ClaimParser.build_customer_message` (template-based) is used as a fallback. `needs_review` claims never trigger `generate_message` — they require staff action, not a customer reply.
+**Customer message format:** `ClaimParser.build_customer_message_llm` composes the outbound email for all three statuses using an LLM guided by structured claim context and writing guidelines from `config/messages.yaml`. Message tone and content vary by status: `complete` congratulates and confirms no action needed; `needs_review` explains the uncertain item(s) in plain language, sets timeline expectations (3–5 days), and offers resubmission to speed up review; `incomplete` presents our best-guess values for confirmation and requests missing documents. If the LLM call fails, `ClaimParser.build_customer_message` (template-based) is used as a fallback.
 
 **Claim prioritisation logic:**
 
@@ -185,8 +195,20 @@ class ClaimParser:
         message_config: dict
     ) -> None
     # called after every accepted reply; uses LLM to update claim.conversation_summary
-    # summary tracks confirmed/corrected/pending items across rounds; used by build_customer_message_llm
+    # summary tracks both sides: customer CONFIRMED/CORRECTED/PENDING items AND what we already
+    # told the customer (WE_SAID), so the next message never contradicts a prior outbound message
     # best-effort: silently skips on failure so claim processing is never blocked
+
+    def merge_summary_fields(
+        self, claim: Claim,
+        llm_client: BaseLLMClient,
+        schemas: list[FieldSchema]
+    ) -> None
+    # called after update_conversation_summary; extracts fields from conversation_summary
+    # and merges them into claim.extracted_fields
+    # summary fields use source_trust="user_input", confidence="medium" (customer-confirmed answers
+    # to direct questions); they fill in fields absent from documents and can override
+    # low-confidence document extractions, but never override high-confidence document values
 
     def resolve_multiple_versions(
         self, claim: Claim
@@ -340,9 +362,10 @@ class LLMClientFactory:
 **Responsibility:** Named, callable tool functions invoked conditionally during processing. Each call is logged to `Claim.tools_used` so the audit trail shows which tools ran and why. No tool modifies claim state directly — callers decide what to do with the result.
 
 ```python
-def classify_document(file_name: str) -> dict
-# infers doc type from filename keywords
-# called by node_parse_documents for every file before reading
+def classify_document(file_name: str, actual_type: str | None = None) -> dict
+# infers doc type from filename keywords; records actual VLM-confirmed type when provided
+# result includes inferred_doc_type, actual_doc_type (if given), and overridden flag
+# called by node_parse_documents after reading each file
 
 def validate_vin(vin: str) -> dict
 # checks VIN length and character set
@@ -491,13 +514,14 @@ A claim cannot reach `complete` status if any required document is missing or ha
 4. any unresolved blocking inconsistency                      → needs_review
    (warning-severity inconsistencies do not affect routing)
 5. any parse_status == "parse_failed"                         → needs_review
-6. any doc_type == "unknown"                                  → needs_review
-7. any unresolved low_confidence required field               → needs_review
+6. any unresolved low_confidence required field               → needs_review
 
 # complete
-8. all required docs present + all required fields valid      → complete
-9. fallback                                                   → incomplete
+7. all required docs present + all required fields valid      → complete
+8. fallback                                                   → incomplete
 ```
+
+**Note on unknown doc type:** `doc_type == "unknown"` on a non-required document does **not** trigger `needs_review` — extra/supplementary docs the VLM can't classify are ignored as long as all required docs are present. Required docs classified as `unknown` are caught upstream by the missing-placeholder mechanism (rule 1).
 
 **Status semantics:**
 
@@ -505,7 +529,7 @@ A claim cannot reach `complete` status if any required document is missing or ha
 |--------|---------|---------|
 | `complete` | All required docs present, all fields valid, no unresolved blocking issues | Nobody — ready to finalise |
 | `incomplete` | Customer-fixable problem: missing doc or same-filename duplicate | Customer |
-| `needs_review` | All docs present but human judgment required (inconsistency, parse failure, unknown doc type, low confidence) | Company staff |
+| `needs_review` | All docs present but human judgment required (inconsistency, parse failure, low confidence) | Company staff |
 
 **Two-criterion split:** `incomplete` is reserved exclusively for cases the customer can fix themselves. Everything else that blocks completion goes to `needs_review`. This removes the `reply_count` branch from `determine_status` — whether a reply has been received does not change who needs to act.
 
@@ -521,7 +545,7 @@ All unrecoverable errors result in `needs_review` status rather than silent fail
 | VLM returns malformed JSON | `ParseFailedError` raised immediately (not retried) → `parse_status = "parse_failed"`, claim → `needs_review` |
 | File corrupted or unreadable | `parse_status = "parse_failed"`, claim → `needs_review`, logged in `status_reason` |
 | PDF with no text layer | `PDFReader` detects low text volume (below `pdf_text_threshold`) and falls back to `ImageReader` |
-| Unknown doc type | `doc_type = "unknown"`, claim → `needs_review`, no field extraction attempted |
+| Unknown doc type (non-required) | `doc_type = "unknown"`, logged in `Claim.tools_used`; does not affect routing if required docs are present |
 | Unsupported `model_id` | `UnsupportedModelError` raised at `LLMClientFactory.get_client()`, before any processing begins |
 
 ---
@@ -552,30 +576,37 @@ ClaimAgent
     │           check_field_consistency / validate_vin → Claim.tools_used
     │       ClaimParser.determine_status → complete / incomplete / needs_review
     │
-    ├── [if incomplete AND reply_queue empty]
+    ├── [all statuses, unless incomplete AND reply_queue non-empty]
     │       node_generate_message
     │           ClaimParser.build_customer_message_llm (LLM-composed, guidelines + claim context)
-    │               context: conversation_summary, best-guess field values, document status
+    │               context: status, conversation_summary, best-guess field values, document status
+    │               tone varies by status: complete=congratulate, needs_review=explain+timeline,
+    │                                      incomplete=confirm values + request missing docs
     │           fallback on failure: ClaimParser.build_customer_message (template)
     │           → chatbot.display() + ConversationRound(direction="outbound") appended
+    │           if complete or needs_review → END
     │
-    ├── [if incomplete AND reply_queue non-empty, or after generate_message]
+    ├── [if incomplete: after generate_message, or directly from cross_validate if reply_queue non-empty]
     │       node_accept_reply
     │           if reply_queue non-empty:
     │               pop reply_text from queue; chatbot.display("[Auto-loaded]" preview)
     │           else:
     │               chatbot.ask() → reply_text  (returns "" on EOF for non-interactive runs)
     │           ClaimParser.handle_reply(claim, reply_text, llm_client, schemas)
-    │               ├── extract_reply_fields (TextReader, source_trust = "user_input")
+    │               ├── extract_reply_fields (TextReader, source_trust = "user_input", confidence = low)
     │               ├── compare_fields
     │               ├── record_reply → ConversationRound(direction="inbound") appended
     │               └── determine_status → updated Claim.status
     │           ClaimParser.update_conversation_summary(claim, llm_client, message_config)
-    │               └── LLM distils reply into claim.conversation_summary (best-effort)
+    │               └── LLM updates claim.conversation_summary — tracks both customer answers
+    │                   (CONFIRMED/CORRECTED/PENDING) and what we told the customer (WE_SAID)
+    │           ClaimParser.merge_summary_fields(claim, llm_client, schemas)
+    │               └── extracts fields from summary → merges into claim.extracted_fields
+    │                   at confidence="medium" (fills gaps; overrides low-confidence doc values)
     │           → loop back to node_cross_validate if under max_reply_rounds
     │
     └── [after processing]
-            ClaimAgent.prioritize_claims → list[PriorityRecord]
+            scheduler.prioritize_claims(claims, message_config) → list[PriorityRecord]
 ```
 
 ---
@@ -618,11 +649,11 @@ claims/
 
 **Customer replies cannot resolve inconsistencies.** Even if a customer's reply matches one document, the underlying conflict between original documents still exists and requires human judgment. Accepting a reply as resolution would silently dismiss a potentially significant data conflict.
 
-**Human input is never trusted.** Customer replies are parsed with `source_trust = "user_input"` and a hard confidence cap of `low`. Reply data is recorded for audit but never used to auto-resolve issues.
+**Customer reply confidence is hard-capped at low; summary fields are elevated to medium.** Raw customer replies use `source_trust = "user_input"` and `confidence = "low"` — they are recorded for audit but cannot override any document-extracted value. However, after each reply the LLM distils the conversation into `conversation_summary` and `merge_summary_fields` extracts fields from that summary at `confidence = "medium"`. The elevation is justified because summary fields represent explicit answers to direct questions (CONFIRMED/CORRECTED in the summary), not unsolicited raw text. Medium confidence can override a low-confidence document extraction (e.g., blurry OCR) but never a high-confidence one.
 
-**LLM-composed customer messages with template fallback.** The primary path (`build_customer_message_llm`) passes structured claim context — document status, best-guess field values, and the running `conversation_summary` — to the LLM with guidelines in `config/messages.yaml`. The LLM composes a natural, context-aware email: it acknowledges prior replies, presents our best-guess values for confirmation rather than asking open "which is correct?" questions, and distinguishes blocking issues (customer must act) from warning-level ones (staff will handle). A template-based fallback (`build_customer_message`) fires if the LLM call fails. Both paths produce a single unified email per interaction cycle to avoid sending multiple disjointed messages for the same claim.
+**LLM-composed customer messages with template fallback.** The primary path (`build_customer_message_llm`) passes structured claim context — status, document status, best-guess field values, and the running `conversation_summary` — to the LLM with guidelines in `config/messages.yaml`. Message tone and content are status-driven: `complete` congratulates and confirms no action needed; `needs_review` explains the specific uncertain item(s) in plain language, sets a 3–5 business day timeline expectation, and offers resubmission as an option; `incomplete` presents our best-guess values for confirmation and requests missing documents. A template-based fallback (`build_customer_message`) fires if the LLM call fails.
 
-**Running conversation summary.** `Claim.conversation_summary` is an LLM-maintained rolling summary updated after every customer reply. It tracks confirmed/corrected/pending items across rounds and is fed into the message context so the LLM never re-asks for information the customer has already addressed. The raw `conversation_log` is preserved for audit; the summary exists solely to keep the message context window small and accurate as the conversation grows.
+**Running conversation summary tracks both sides.** `Claim.conversation_summary` is an LLM-maintained rolling summary updated after every customer reply. It tracks customer answers (CONFIRMED/CORRECTED/PENDING) and what we have already told the customer (WE_SAID), so subsequent messages never contradict prior outbound messages or re-ask for information already provided. The raw `conversation_log` is preserved for audit; the summary exists solely to keep the message context window small and consistent as the conversation grows.
 
 **Status enum matches the spec.** `complete | incomplete | needs_review` map directly to who acts next: nobody, the customer, and company staff respectively.
 

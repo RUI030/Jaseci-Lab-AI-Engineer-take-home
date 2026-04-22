@@ -9,6 +9,7 @@ import pytest
 from core.agent import ClaimAgent
 from core.chatbot import Chatbot
 from core.models import Claim, DocRecord, ExtractedField, ValidationIssue
+from core.scheduler import prioritize_claims
 
 
 def _make_claim(status="incomplete", reply_count=0, uploaded_at="2024-01-01T00:00:00",
@@ -166,7 +167,7 @@ def test_prioritize_claims_order(monkeypatch):
         _make_claim("complete", claim_id="CLM-001", uploaded_at="2024-01-01T00:00:00"),
         _make_claim("incomplete", claim_id="CLM-002", uploaded_at="2024-01-02T00:00:00"),
     ]
-    records = agent.prioritize_claims(claims)
+    records = prioritize_claims(claims, agent.message_config)
 
     assert records[0].claim_id == "CLM-001"  # complete first
     assert records[0].priority_rank == 1
@@ -192,7 +193,7 @@ def test_prioritize_claims_express_flag(monkeypatch):
             ValidationIssue(issue_type="inconsistency", description="Date mismatch", resolved=False),
         ]
     )
-    records = agent.prioritize_claims([standard_claim, express_claim])
+    records = prioritize_claims([standard_claim, express_claim], agent.message_config)
 
     express_records = [r for r in records if r.express]
     assert len(express_records) == 1
@@ -210,7 +211,7 @@ def test_prioritize_claims_oldest_first_within_same_status(monkeypatch):
         _make_claim("needs_review", claim_id="CLM-NEW", uploaded_at="2024-06-01T00:00:00"),
         _make_claim("needs_review", claim_id="CLM-OLD", uploaded_at="2024-01-01T00:00:00"),
     ]
-    records = agent.prioritize_claims(claims)
+    records = prioritize_claims(claims, agent.message_config)
     assert records[0].claim_id == "CLM-OLD"
 
 
@@ -260,5 +261,5 @@ def test_process_claim_txt_not_classified_by_vlm(monkeypatch, tmp_path):
 def test_prioritize_claims_reason_populated(monkeypatch):
     agent = _make_agent_with_mock_llm(monkeypatch)
     claims = [_make_claim("complete", claim_id="CLM-001")]
-    records = agent.prioritize_claims(claims)
+    records = prioritize_claims(claims, agent.message_config)
     assert records[0].reason != ""

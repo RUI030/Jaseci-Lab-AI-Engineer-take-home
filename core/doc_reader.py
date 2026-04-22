@@ -8,24 +8,12 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Literal
 
-import yaml
 from pydantic import BaseModel
 
 from core.exceptions import ParseFailedError
 from core.llm_adapters import BaseLLMClient
 from core.models import DocRecord, ExtractedField, FieldSchema
 
-
-_PDF_TEXT_THRESHOLD: int | None = None
-
-
-def _pdf_text_threshold() -> int:
-    global _PDF_TEXT_THRESHOLD
-    if _PDF_TEXT_THRESHOLD is None:
-        path = Path(__file__).parent.parent / "config" / "settings.yaml"
-        with open(path) as f:
-            _PDF_TEXT_THRESHOLD = yaml.safe_load(f).get("pdf_text_threshold", 100)
-    return _PDF_TEXT_THRESHOLD
 
 
 def _hash_file(path: str) -> str:
@@ -262,41 +250,46 @@ class PDFReader(BaseDocReader):
         schemas: list[FieldSchema],
         client: BaseLLMClient,
     ) -> DocRecord:
-        import pdfplumber
-
-        threshold = _pdf_text_threshold()
-        status_reason: str | None = None
-
-        with pdfplumber.open(file_path) as pdf:
-            text = "\n".join(p.extract_text() or "" for p in pdf.pages)
-
         content_hash = _hash_file(file_path)
-
-        if len(text.strip()) < threshold:
-            status_reason = (
-                f"PDF text volume ({len(text.strip())} chars) below threshold "
-                f"({threshold}); falling back to ImageReader."
-            )
-            reader = ImageReader()
-            record = reader.read(file_path, schemas, client)
-            record.status_reason = status_reason
-            record.content_hash = content_hash
-            return record
-
-        # Send extracted text rather than the PDF file so the VLM receives
-        # unambiguous machine-readable content and can assign high confidence.
-        wrapped = f"<document>\n{text}\n</document>"
         prompt = _build_prompt(
             schemas,
-            context_note="This is machine-readable text extracted from a PDF. Confidence should be high for found values.",
+            context_note=(
+                "This is a PDF document. Read all pages including tables and structured layouts. "
+                "Confidence should be high for clearly readable content."
+            ),
             filename=Path(file_path).name,
         )
-        full_prompt = f"{prompt}\n\nDocument content:\n{wrapped}"
-        try:
-            response = self.call_vlm(full_prompt, files=None, client=client)
-            parse_status = "complete"
-        except ParseFailedError as exc:
-            return self._failed_record(file_path, exc, content_hash, text)
+
+        if client.supports_native_pdf():
+            # Gemini (Files API) and QwenLocal (renders pages internally) accept the PDF directly.
+            try:
+                response = self.call_vlm(prompt, files=[file_path], client=client)
+                parse_status = "complete"
+            except ParseFailedError as exc:
+                return self._failed_record(file_path, exc, content_hash)
+        else:
+            # Qwen API only accepts images — render each page to PNG and pass all of them.
+            import pdfplumber
+            tmp_paths: list[str] = []
+            try:
+                with pdfplumber.open(file_path) as pdf:
+                    for i, page in enumerate(pdf.pages):
+                        img = page.to_image(resolution=150).original
+                        tmp = tempfile.NamedTemporaryFile(suffix=f"_p{i}.png", delete=False)
+                        img.save(tmp.name)
+                        tmp.close()
+                        tmp_paths.append(tmp.name)
+            except Exception as exc:
+                return self._failed_record(file_path, exc, content_hash)
+
+            try:
+                response = self.call_vlm(prompt, files=tmp_paths, client=client)
+                parse_status = "complete"
+            except ParseFailedError as exc:
+                return self._failed_record(file_path, exc, content_hash)
+            finally:
+                for p in tmp_paths:
+                    Path(p).unlink(missing_ok=True)
 
         fields = _response_to_extracted_fields(response, "document", schemas)
         doc_type = response.get("doc_type", "unknown")
@@ -308,7 +301,6 @@ class PDFReader(BaseDocReader):
             source_trust="document",
             parse_status=parse_status,
             content_hash=content_hash,
-            raw_text=text,
             fields=fields,
             status_reason=override_reason,
         )

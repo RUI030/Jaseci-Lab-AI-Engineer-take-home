@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 
 from core.agent import ClaimAgent
 from core.chatbot import Chatbot
+from core.scheduler import prioritize_claims
 
 load_dotenv()
 
@@ -129,7 +130,7 @@ def main() -> int:
         return 1
 
     # Prioritization summary
-    records = agent.prioritize_claims(claims)
+    records = prioritize_claims(claims, agent.message_config)
     print("\n" + "="*60)
     print("  PRIORITY ORDER")
     print("="*60)

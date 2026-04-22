@@ -17,7 +17,6 @@ from core.models import (
     ConversationRound,
     DocRecord,
     FieldSchema,
-    PriorityRecord,
 )
 from core.parser import REQUIRED_DOC_TYPES, ClaimParser
 from core.utils import load_yaml, load_field_schemas
@@ -126,6 +125,12 @@ def node_parse_documents(state: ClaimState) -> ClaimState:
             record = reader.read(str(file_path), schemas, client)
             if record.doc_type in REQUIRED_DOC_TYPES:
                 attempted_required_types.add(record.doc_type)
+            elif record.parse_status == "parse_failed":
+                # Soft parse failure (no exception) — fall back to filename heuristic
+                for req_type in REQUIRED_DOC_TYPES:
+                    if req_type in file_name.lower().replace("-", "_"):
+                        attempted_required_types.add(req_type)
+                        break
         except Exception as exc:
             # Use filename to infer intended required type before discarding it
             for req_type in REQUIRED_DOC_TYPES:
@@ -273,11 +278,15 @@ def node_accept_reply(state: ClaimState) -> ClaimState:
 
 
 def _route_after_validate(state: ClaimState) -> str:
-    if state["claim"].status != "incomplete":
-        return END
-    if state["reply_queue"]:
+    if state["claim"].status == "incomplete" and state["reply_queue"]:
         return "accept_reply"  # customer already replied — process it before sending anything
-    return "generate_message"
+    return "generate_message"  # all statuses send a message
+
+
+def _route_after_generate(state: ClaimState) -> str:
+    if state["claim"].status == "incomplete":
+        return "accept_reply"
+    return END  # complete and needs_review — message sent, hand off to customer / staff
 
 
 def _route_after_reply(state: ClaimState) -> str:
@@ -289,32 +298,6 @@ def _route_after_reply(state: ClaimState) -> str:
     if claim.reply_count < max_rounds:
         return "cross_validate"
     return END
-
-
-# --- H6 + L9: express eligibility and single-pass prioritization ---
-
-def _is_express_eligible(claim: Claim) -> bool:
-    """Return True when the claim qualifies for express routing.
-
-    Requires fewer than 2 unresolved issues AND no missing-doc placeholders.
-    Missing docs are excluded because they represent absent required files, not
-    customer-fixable issues that express routing is designed for.
-    """
-    return (
-        sum(1 for vi in claim.validation_issues if not vi.resolved) < 2
-        and not any(r.doc_status == "missing" for r in claim.doc_table)
-    )
-
-
-def _priority_key(claim: Claim) -> int:
-    """Return sort key for prioritize_claims (lower = higher priority)."""
-    if claim.status == "complete":
-        return 0
-    if claim.status == "needs_review":
-        return 1  # human must act — staff can do something now
-    if claim.status == "incomplete" and _is_express_eligible(claim):
-        return 2  # waiting on customer, but nearly resolved
-    return 3  # incomplete — waiting on customer, nothing staff can do yet
 
 
 class ClaimAgent:
@@ -342,9 +325,13 @@ class ClaimAgent:
         graph.add_conditional_edges(
             "cross_validate",
             _route_after_validate,
-            {"generate_message": "generate_message", "accept_reply": "accept_reply", END: END},
+            {"generate_message": "generate_message", "accept_reply": "accept_reply"},
         )
-        graph.add_edge("generate_message", "accept_reply")
+        graph.add_conditional_edges(
+            "generate_message",
+            _route_after_generate,
+            {"accept_reply": "accept_reply", END: END},
+        )
         graph.add_conditional_edges(
             "accept_reply",
             _route_after_reply,
@@ -402,48 +389,3 @@ class ClaimAgent:
 
         return final_claim
 
-    def prioritize_claims(self, claims: list[Claim]) -> list[PriorityRecord]:
-        """Sort claims by status priority then upload time; assign express flag.
-
-        Priority groups (lowest number = highest priority):
-          0 complete → 1 needs_review → 2 incomplete-express → 3 incomplete-standard
-        Within each group, oldest upload_at wins.
-        """
-        priority_reasons = self.message_config.get("priority_reason", {})
-
-        ordered = sorted(claims, key=lambda c: (_priority_key(c), c.uploaded_at))
-
-        records: list[PriorityRecord] = []
-        for rank, claim in enumerate(ordered, start=1):
-            express = claim.status == "incomplete" and _is_express_eligible(claim)
-            if claim.status == "complete":
-                reason = priority_reasons.get(
-                    "complete_oldest",
-                    "All documents present and valid — ready to finalize.",
-                )
-            elif claim.status == "needs_review":
-                reason = priority_reasons.get(
-                    "pending_oldest",
-                    "Requires human review.",
-                )
-            elif express:
-                reason = priority_reasons.get(
-                    "incomplete_express",
-                    "Express routing — fewer than 2 unresolved issues.",
-                )
-            else:  # incomplete standard
-                reason = priority_reasons.get(
-                    "incomplete_standard",
-                    "Incomplete claim — customer notification required.",
-                )
-            records.append(
-                PriorityRecord(
-                    claim_id=claim.claim_id,
-                    status=claim.status,
-                    uploaded_at=claim.uploaded_at,
-                    express=express,
-                    priority_rank=rank,
-                    reason=reason,
-                )
-            )
-        return records

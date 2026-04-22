@@ -65,7 +65,7 @@ LLMAdapters    (core/llm_adapters.py)— Gemini and Qwen clients behind BaseLLMC
 
 **`.txt` files as auto-replies**: during `parse_documents`, any `.txt` file is read as a customer reply, added to `ClaimState.reply_queue`, and recorded as `doc_type="customer_reply"` in `doc_table`. `node_accept_reply` drains the queue before falling back to stdin.
 
-**DocReader dispatch** (`get_doc_reader`): selects `PDFReader`, `ImageReader`, or `TextReader` by file extension. `PDFReader` falls back to `ImageReader` when extracted text is below `pdf_text_threshold` (set in `config/settings.yaml`).
+**DocReader dispatch** (`get_doc_reader`): selects `PDFReader`, `ImageReader`, or `TextReader` by file extension. `PDFReader` checks `client.supports_native_pdf()`: Gemini uploads the PDF directly via Files API; QwenLocal renders pages to images internally; Qwen API renders each page to PNG in PDFReader and passes them all.
 
 **Field extraction flow**: Each `DocReader` calls the LLM with a structured prompt and expects a JSON response matching `_ExtractionResponse`. Fields are merged into `Claim.extracted_fields` — highest confidence wins per field name across all documents.
 
@@ -94,7 +94,7 @@ All config is in `config/` — no magic constants in code:
 
 | File | Purpose |
 |------|---------|
-| `settings.yaml` | Active `model_id` (`gemini`\|`qwen`\|`qwen_local`), model params, `pdf_text_threshold` |
+| `settings.yaml` | Active `model_id` (`gemini`\|`qwen`\|`qwen_local`), model params, retry config |
 | `field_schema.json` | Required/optional fields, data types, validation rules, unify instructions |
 | `messages.yaml` | LLM guidelines for customer messages and conversation summaries; template fallback; priority reason strings |
 | `workflow.yaml` | `max_reply_rounds` and other routing parameters |

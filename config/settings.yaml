@@ -1,7 +1,5 @@
 model_id: "qwen_local"  # choose: "gemini", "qwen", or "qwen_local"
 
-pdf_text_threshold: 100  # characters; below this PDFReader falls back to ImageReader
-
 gemini:
   model: "gemini-2.5-flash"
   temperature: 0.0

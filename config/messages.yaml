@@ -42,19 +42,37 @@ customer_message_guideline: |
     do NOT re-ask for information the customer has already responded to
   - Open with 1–2 sentences that acknowledge the conversation so far (if any); skip this if first contact
 
-  Confirmation style (important):
-  - We already have a best-guess value for every flagged field (shown in the claim state above)
+  Write the email based on the Status field in the claim state:
+
+  If Status is COMPLETE:
+  - Congratulate the customer — all documents and information are in order
+  - Let them know their claim is being finalised and they will hear from us shortly
+  - No action required from the customer; keep it warm and brief
+
+  If Status is NEEDS_REVIEW:
+  - Acknowledge receipt of all documents
+  - Explain which specific part(s) are uncertain (listed under "Reasons this claim requires human review")
+    in plain language — no jargon, no internal system terms
+  - Inform the customer that a human reviewer will look into it; be honest that this may take longer
+    than standard processing (typically 3–5 business days)
+  - For any item where a clearer document resubmission would speed up review, offer that option:
+    "If you have a clearer copy of [document], resubmitting it may help us resolve this faster."
+  - Do NOT promise a specific outcome; do NOT ask the customer to do anything they cannot do
+
+  If Status is INCOMPLETE:
+  - Confirmation style: we already have a best-guess value for every flagged field
   - Do NOT ask open-ended "which value is correct?" — always lead with our current working value
     and ask the customer to confirm or correct it. Example:
     "We currently have your VIN as 3FADP4BJ7EM207685 — could you confirm this is correct?"
   - For warning-level discrepancies: briefly mention our working value and that staff will verify;
     tell the customer no action is needed unless they spot something wrong
 
-  Formatting:
-  - Numbered list for action items; one item per issue; be specific about document names and field values
-  - Do NOT mention internal system details (confidence scores, parse errors, file formats, system status)
+  Formatting (all statuses):
+  - Numbered list for action items or review reasons; one item per issue
+  - Be specific about document names and field values
+  - Do NOT mention internal system details (confidence scores, parse errors, file formats, system status codes)
   - Do NOT include information not present in the claim state above
-  - Concise: opening acknowledgement + numbered items + brief closing
+  - Concise: opening acknowledgement + body + brief closing
   - Sign off as "Claims Processing Team"
 
   Write the email now. Output only the email body — no subject line, no extra commentary.

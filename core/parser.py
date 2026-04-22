@@ -649,7 +649,7 @@ class ClaimParser:
     @staticmethod
     def _build_claim_context(claim: Claim) -> str:
         """Assemble a human-readable claim state summary to feed into the LLM message prompt."""
-        lines = [f"Claim ID: {claim.claim_id}"]
+        lines = [f"Claim ID: {claim.claim_id}", f"Status: {claim.status.upper()}"]
 
         # Prefer the running summary for context; fall back to raw last message if no summary yet
         if claim.conversation_summary:
@@ -669,7 +669,7 @@ class ClaimParser:
         lines.append("\nDocument status:")
         for r in claim.doc_table:
             if r.doc_type == "customer_reply":
-                continue  # already captured above
+                continue
             if r.doc_status == "missing":
                 lines.append(f"  MISSING (required): {r.doc_type}")
             elif r.parse_status == "parse_failed":
@@ -679,35 +679,81 @@ class ClaimParser:
             else:
                 lines.append(f"  OK: {r.file_name} ({r.doc_type})")
 
-        # Issues — split into blocking (needs customer action) and warning (staff-handled, inform only)
         blocking = [vi for vi in claim.validation_issues if not vi.resolved and vi.severity == "blocking"]
         warnings = [vi for vi in claim.validation_issues if not vi.resolved and vi.severity == "warning"]
 
-        if blocking:
-            lines.append("\nItems requiring customer confirmation or action:")
-            for i, vi in enumerate(blocking, 1):
+        if claim.status == "needs_review":
+            # Surface exactly what triggered needs_review so the LLM can explain it to the customer
+            lines.append("\nReasons this claim requires human review (explain each to the customer):")
+            parse_failed = [r.file_name for r in claim.doc_table if r.parse_status == "parse_failed"]
+            for fname in parse_failed:
+                lines.append(f"  - Document '{fname}' could not be read — contents are uncertain.")
+            low_conf = [
+                f for f in claim.extracted_fields.values()
+                if f.field_role == "required" and f.confidence == "low"
+            ]
+            for f in low_conf:
+                lines.append(
+                    f"  - Required field '{f.field_name}' has a low-confidence value ('{f.unified_value}') "
+                    f"— a human will verify this before proceeding."
+                )
+            same_content_dups = [
+                r for r in claim.doc_table
+                if r.doc_status == "duplicate" and r.duplicate_type == "same_content"
+            ]
+            for r in same_content_dups:
+                lines.append(
+                    f"  - '{r.file_name}' appears to be an exact copy of another submitted document "
+                    f"— a human will investigate."
+                )
+            for vi in blocking:
                 if vi.resubmit_doc:
                     lines.append(
-                        f"  {i}. Field '{vi.field_name}': document '{vi.resubmit_doc}' appears unreliable. "
-                        f"Ask customer to re-submit a clearer copy, or confirm it is correct as-is."
+                        f"  - Field '{vi.field_name}': document '{vi.resubmit_doc}' gave an unreliable value. "
+                        f"Customer may resubmit a clearer copy to speed up review."
                     )
                 else:
                     ef = claim.extracted_fields.get(vi.field_name or "")
                     best_guess = ef.unified_value if ef and ef.unified_value else None
+                    all_vals = "; ".join(f"{d}: \"{v}\"" for d, v in vi.values.items())
                     if best_guess:
-                        conflict = {doc: val for doc, val in vi.values.items() if val != best_guess}
-                        conflict_str = "; ".join(f"{d} says \"{v}\"" for d, v in conflict.items())
                         lines.append(
-                            f"  {i}. Field '{vi.field_name}': our current best guess is \"{best_guess}\". "
-                            f"However, {conflict_str}. "
-                            f"Ask customer to confirm whether \"{best_guess}\" is correct, or provide the right value."
+                            f"  - Field '{vi.field_name}' has conflicting values ({all_vals}); "
+                            f"our best guess is \"{best_guess}\" but a human must confirm. "
+                            f"Customer may resubmit corrected documents to speed up review."
                         )
                     else:
-                        all_vals = "; ".join(f"{d}: \"{v}\"" for d, v in vi.values.items())
                         lines.append(
-                            f"  {i}. Field '{vi.field_name}' has conflicting values ({all_vals}) "
-                            f"with no clear winner. Ask customer to provide the correct value."
+                            f"  - Field '{vi.field_name}' has conflicting values ({all_vals}) "
+                            f"with no clear winner — human review required."
                         )
+
+        elif claim.status == "incomplete":
+            if blocking:
+                lines.append("\nItems requiring customer confirmation or action:")
+                for i, vi in enumerate(blocking, 1):
+                    if vi.resubmit_doc:
+                        lines.append(
+                            f"  {i}. Field '{vi.field_name}': document '{vi.resubmit_doc}' appears unreliable. "
+                            f"Ask customer to re-submit a clearer copy, or confirm it is correct as-is."
+                        )
+                    else:
+                        ef = claim.extracted_fields.get(vi.field_name or "")
+                        best_guess = ef.unified_value if ef and ef.unified_value else None
+                        if best_guess:
+                            conflict = {doc: val for doc, val in vi.values.items() if val != best_guess}
+                            conflict_str = "; ".join(f"{d} says \"{v}\"" for d, v in conflict.items())
+                            lines.append(
+                                f"  {i}. Field '{vi.field_name}': our current best guess is \"{best_guess}\". "
+                                f"However, {conflict_str}. "
+                                f"Ask customer to confirm whether \"{best_guess}\" is correct, or provide the right value."
+                            )
+                        else:
+                            all_vals = "; ".join(f"{d}: \"{v}\"" for d, v in vi.values.items())
+                            lines.append(
+                                f"  {i}. Field '{vi.field_name}' has conflicting values ({all_vals}) "
+                                f"with no clear winner. Ask customer to provide the correct value."
+                            )
 
         if warnings:
             lines.append("\nNotes (staff-handled — inform customer no action required):")

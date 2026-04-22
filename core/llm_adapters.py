@@ -98,6 +98,13 @@ def _prepare_gemini_schema(schema: dict) -> dict:
 
 
 class BaseLLMClient(ABC):
+    def supports_native_pdf(self) -> bool:
+        """Return True if this adapter can receive a PDF path directly in files=[].
+
+        When False, PDFReader renders each page to a PNG image and passes those instead.
+        """
+        return False
+
     @abstractmethod
     def generate(
         self,
@@ -113,6 +120,9 @@ class BaseLLMClient(ABC):
 
 
 class GeminiAdapter(BaseLLMClient):
+    def supports_native_pdf(self) -> bool:
+        return True  # Gemini Files API accepts PDFs directly
+
     def __init__(self, model: str, temperature: float = 0.0) -> None:
         from google import genai
         from google.genai import types as genai_types
@@ -265,6 +275,9 @@ class QwenLocalAdapter(BaseLLMClient):
     Supports any Qwen vision-language model family (Qwen2-VL, Qwen2.5-VL, Qwen3-VL, …).
     Set the HuggingFace Hub model ID in config/settings.yaml under qwen_local.model.
     """
+
+    def supports_native_pdf(self) -> bool:
+        return True  # _build_messages renders PDF pages to images internally
 
     def __init__(self, model: str, device: str = "auto", temperature: float = 0.0) -> None:
         from transformers import AutoModelForImageTextToText, AutoProcessor
