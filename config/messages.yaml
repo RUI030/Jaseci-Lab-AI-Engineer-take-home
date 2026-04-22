@@ -1,0 +1,56 @@
+templates:
+  missing_document: |
+    Hello,
+
+    We are processing your claim {claim_id}. To continue, we need the following
+    document(s): {missing_docs}.
+
+    Please upload these at your earliest convenience.
+
+    Best regards,
+    Claims Processing Team
+
+  field_inconsistency: |
+    Hello,
+
+    We noticed a discrepancy in the information provided for claim {claim_id}.
+    The field "{field_name}" has different values across your submitted documents:
+    {inconsistency_details}
+
+    Could you confirm which value is correct?
+
+    Best regards,
+    Claims Processing Team
+
+  parse_failed: |
+    Hello,
+
+    We were unable to process one or more documents in your claim {claim_id}
+    ({failed_docs}). Please re-submit clear, legible copies.
+
+    Best regards,
+    Claims Processing Team
+
+  pending_review: |
+    Hello,
+
+    Your claim {claim_id} has been flagged for review by our team.
+    We will contact you within 2-3 business days.
+
+    Best regards,
+    Claims Processing Team
+
+  complete: |
+    Hello,
+
+    Great news! Your claim {claim_id} has been reviewed and all documents
+    and fields are in order. We will proceed with finalizing your claim.
+
+    Best regards,
+    Claims Processing Team
+
+priority_reason:
+  complete_oldest: "All required documents present and valid — ready to finalize. Oldest submission prioritized."
+  incomplete_express: "Incomplete with fewer than 2 unresolved issues — express routing for quick customer response."
+  incomplete_standard: "Incomplete claim — customer notification required."
+  pending_oldest: "Requires human review — queued in order of submission date."

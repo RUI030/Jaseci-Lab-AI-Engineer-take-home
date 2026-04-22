@@ -1,0 +1,34 @@
+[
+  {
+    "field_name": "VIN",
+    "data_type": "string",
+    "field_role": "required",
+    "validation_rule": "Exactly 17 alphanumeric characters, case-insensitive",
+    "unify_instruction": "Uppercase, remove all whitespace and hyphens",
+    "description": "Vehicle Identification Number of the insured vehicle"
+  },
+  {
+    "field_name": "date_of_loss",
+    "data_type": "date",
+    "field_role": "required",
+    "validation_rule": "Valid calendar date in YYYY-MM-DD format",
+    "unify_instruction": "Normalize to ISO 8601 YYYY-MM-DD. Resolve ambiguous formats using US locale (e.g., 01/02/2024 -> 2024-01-02)",
+    "description": "Date the vehicle loss or accident occurred"
+  },
+  {
+    "field_name": "insurance_payout",
+    "data_type": "number",
+    "field_role": "required",
+    "validation_rule": "Positive numeric value in USD",
+    "unify_instruction": "Strip currency symbols and commas. Return as string of numeric value only (e.g., '24500.00')",
+    "description": "Settlement amount the insurer will pay out"
+  },
+  {
+    "field_name": "outstanding_loan_balance",
+    "data_type": "number",
+    "field_role": "optional",
+    "validation_rule": "Non-negative numeric value in USD",
+    "unify_instruction": "Strip currency symbols and commas. Return as string of numeric value only (e.g., '18200.00')",
+    "description": "Remaining loan balance on the vehicle at time of loss"
+  }
+]

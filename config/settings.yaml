@@ -1,0 +1,11 @@
+model_id: "gemini"
+pdf_text_threshold: 100  # characters; below this PDFReader falls back to ImageReader
+
+gemini:
+  model: "gemini-2.0-flash"
+  temperature: 0.0
+
+qwen:
+  model: "qwen-vl-max"
+  base_url: ""   # override via QWEN_BASE_URL env var
+  temperature: 0.0
