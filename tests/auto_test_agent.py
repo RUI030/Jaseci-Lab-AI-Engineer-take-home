@@ -23,18 +23,15 @@ def _make_claim(status="incomplete", reply_count=0, uploaded_at="2024-01-01T00:0
 
 
 def _make_agent_with_mock_llm(monkeypatch) -> ClaimAgent:
-    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
-    with patch("core.llm_adapters.GeminiAdapter.__init__", return_value=None):
+    with patch("core.llm_adapters.LLMClientFactory.get_client", return_value=MagicMock()):
         agent = ClaimAgent(chatbot=Chatbot())
-    agent.llm_client = MagicMock()
     return agent
 
 
 # --- __init__ / config loading ---
 
 def test_agent_init_loads_config(monkeypatch):
-    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
-    with patch("core.llm_adapters.GeminiAdapter.__init__", return_value=None):
+    with patch("core.llm_adapters.LLMClientFactory.get_client", return_value=MagicMock()):
         agent = ClaimAgent(chatbot=Chatbot())
     assert agent.workflow_config is not None
     assert agent.message_config is not None
@@ -61,16 +58,14 @@ def test_process_claim_returns_claim_with_correct_id(monkeypatch, tmp_path):
     claim_dir.mkdir()
     (claim_dir / "reply.txt").write_text("Hello, my VIN is 1HGCM82633A004352")
 
-    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
     mock_client = MagicMock()
     mock_client.generate.return_value = {
         "doc_type": "customer_reply",
         "fields": [],
     }
 
-    with patch("core.llm_adapters.GeminiAdapter.__init__", return_value=None):
+    with patch("core.llm_adapters.LLMClientFactory.get_client", return_value=mock_client):
         agent = ClaimAgent(chatbot=Chatbot())
-    agent.llm_client = mock_client
 
     with patch("builtins.input", return_value=""):  # skip interactive reply
         claim = agent.process_claim(str(claim_dir))
@@ -84,13 +79,11 @@ def test_process_claim_saves_cache(monkeypatch, tmp_path):
     claim_dir.mkdir()
     (claim_dir / "note.txt").write_text("some content")
 
-    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
     mock_client = MagicMock()
     mock_client.generate.return_value = {"doc_type": "unknown", "fields": []}
 
-    with patch("core.llm_adapters.GeminiAdapter.__init__", return_value=None):
+    with patch("core.llm_adapters.LLMClientFactory.get_client", return_value=mock_client):
         agent = ClaimAgent(chatbot=Chatbot())
-    agent.llm_client = mock_client
 
     with patch("builtins.input", return_value=""):
         agent.process_claim(str(claim_dir))
@@ -110,13 +103,11 @@ def test_process_claim_detects_same_filename_duplicate(monkeypatch, tmp_path):
     # We'll patch folder.iterdir() to return two Path objects with the same name.
     (claim_dir / "police_report.pdf").write_bytes(b"%PDF file1")
 
-    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
     mock_client = MagicMock()
     mock_client.generate.return_value = {"doc_type": "police_report", "fields": []}
 
-    with patch("core.llm_adapters.GeminiAdapter.__init__", return_value=None):
+    with patch("core.llm_adapters.LLMClientFactory.get_client", return_value=mock_client):
         agent = ClaimAgent(chatbot=Chatbot())
-    agent.llm_client = mock_client
 
     # Simulate two files with the same name by patching Path.iterdir
     original_file = claim_dir / "police_report.pdf"
@@ -145,13 +136,11 @@ def test_process_claim_detects_same_content_duplicate(monkeypatch, tmp_path):
     (claim_dir / "settlement_breakdown.pdf").write_bytes(content)
     (claim_dir / "settlement_breakdown_v2.pdf").write_bytes(content)
 
-    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
     mock_client = MagicMock()
     mock_client.generate.return_value = {"doc_type": "settlement_breakdown", "fields": []}
 
-    with patch("core.llm_adapters.GeminiAdapter.__init__", return_value=None):
+    with patch("core.llm_adapters.LLMClientFactory.get_client", return_value=mock_client):
         agent = ClaimAgent(chatbot=Chatbot())
-    agent.llm_client = mock_client
 
     with patch("pdfplumber.open") as mock_plumber, patch("builtins.input", return_value=""):
         mock_pdf = MagicMock()

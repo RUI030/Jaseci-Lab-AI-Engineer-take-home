@@ -4,12 +4,20 @@ An AI agent that processes insurance claims — reading documents, extracting ke
 
 ## Setup
 
+Requirements are split by use case — install only what you need:
+
+| File | When to install |
+|---|---|
+| `requirements/basic.txt` | Always — core deps for CLI and automated tests |
+| `requirements/localmodel.txt` | Only for `model_id: "qwen_local"` (local GPU inference) |
+| `requirements/demo.txt` | Only for running Jupyter notebooks in `demo/` |
+
 **API adapters (Gemini or Qwen API) — no GPU required:**
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements/basic.txt
 cp .env.example .env
 # edit .env — add GEMINI_API_KEY (or QWEN_API_KEY + QWEN_BASE_URL)
 ```
@@ -17,8 +25,14 @@ cp .env.example .env
 **Local Qwen inference (`model_id: "qwen_local"`) — requires CUDA/MPS GPU:**
 
 ```bash
-pip install -r requirements.txt -r requirements_localmodel.txt
+pip install -r requirements/basic.txt -r requirements/localmodel.txt
 # 8 GB+ VRAM for 3B model, 16 GB+ for 7B
+```
+
+**Interactive demo notebooks:**
+
+```bash
+pip install -r requirements/basic.txt -r requirements/demo.txt
 ```
 
 ## Choosing a Model
@@ -28,7 +42,7 @@ Edit `config/settings.yaml`:
 ```yaml
 model_id: "gemini"      # Gemini 2.5 Flash (default) — needs GEMINI_API_KEY
 # model_id: "qwen"      # Qwen API via DashScope  — needs QWEN_API_KEY + QWEN_BASE_URL
-# model_id: "qwen_local"# Qwen VLM on local GPU   — needs requirements_localmodel.txt
+# model_id: "qwen_local"# Qwen VLM on local GPU   — needs requirements/localmodel.txt
 ```
 
 To change the local model size (e.g. 7B instead of 3B), update `qwen_local.model` in the same file:
@@ -97,7 +111,7 @@ Test files follow the `auto_test_*.py` naming convention so they are easy to dis
 
 **Interactive demos** (Jupyter, human-verified output):
 ```bash
-pip install jupyter
+pip install -r requirements/basic.txt -r requirements/demo.txt
 jupyter notebook demo/demo_doc_parsing.ipynb
 ```
 

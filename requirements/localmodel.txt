@@ -2,7 +2,7 @@
 # Not needed when using model_id: "gemini" or "qwen" (API adapters).
 #
 # Install with:
-#   pip install -r requirements.txt -r requirements_localmodel.txt
+#   pip install -r requirements/basic.txt -r requirements/localmodel.txt
 #
 # Hardware: CUDA GPU (8 GB+ VRAM for 3B, 16 GB+ for 7B) or Apple Silicon MPS.
 

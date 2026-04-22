@@ -1,0 +1,8 @@
+# Dependencies for running the interactive demo notebooks in demo/.
+# Not needed for CLI usage or automated tests.
+#
+# Install with:
+#   pip install -r requirements/basic.txt -r requirements/demo.txt
+
+jupyter>=1.0.0
+ipykernel>=6.0.0
