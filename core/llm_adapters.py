@@ -19,18 +19,31 @@ def _load_settings() -> dict:
         return yaml.safe_load(f)
 
 
-def _strip_schema_keywords(schema: dict) -> dict:
-    """Remove JSON Schema keywords that Gemini's response_schema does not support."""
-    unsupported = {"title", "$defs", "$schema", "additionalProperties", "default"}
-    if isinstance(schema, dict):
-        return {
-            k: _strip_schema_keywords(v)
-            for k, v in schema.items()
-            if k not in unsupported
-        }
-    if isinstance(schema, list):
-        return [_strip_schema_keywords(item) for item in schema]
-    return schema
+def _prepare_gemini_schema(schema: dict) -> dict:
+    """Resolve $ref references inline and strip keywords Gemini does not support.
+
+    Gemini's response_schema rejects $ref / $defs and a few JSON Schema keywords.
+    This function inlines every $ref so the schema is fully self-contained, then
+    strips the unsupported keys in one pass.
+    """
+    _UNSUPPORTED = {"title", "$schema", "additionalProperties", "default"}
+    defs: dict = schema.get("$defs", {})
+
+    def _resolve(node: Any) -> Any:
+        if isinstance(node, dict):
+            if "$ref" in node:
+                ref_name = node["$ref"].split("/")[-1]
+                return _resolve(defs.get(ref_name, {}))
+            return {
+                k: _resolve(v)
+                for k, v in node.items()
+                if k not in _UNSUPPORTED and k != "$defs"
+            }
+        if isinstance(node, list):
+            return [_resolve(item) for item in node]
+        return node
+
+    return _resolve(schema)
 
 
 class BaseLLMClient(ABC):
@@ -85,7 +98,7 @@ class GeminiAdapter(BaseLLMClient):
         config = self._types.GenerateContentConfig(
             temperature=self._temperature,
             response_mime_type="application/json",
-            response_schema=_strip_schema_keywords(
+            response_schema=_prepare_gemini_schema(
                 response_schema.model_json_schema()
             ),
         )
@@ -159,10 +172,14 @@ class QwenAdapter(BaseLLMClient):
 
 
 class QwenLocalAdapter(BaseLLMClient):
-    """Runs a Qwen2.5-VL model locally via Hugging Face transformers."""
+    """Runs a Qwen VL model locally via Hugging Face transformers.
+
+    Supports any Qwen vision-language model family (Qwen2-VL, Qwen2.5-VL, Qwen3-VL, …).
+    Set the HuggingFace Hub model ID in config/settings.yaml under qwen_local.model.
+    """
 
     def __init__(self, model: str, device: str = "auto", temperature: float = 0.0) -> None:
-        from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
+        from transformers import AutoModelForImageTextToText, AutoProcessor
         import torch
 
         self._model_name = model
@@ -170,7 +187,7 @@ class QwenLocalAdapter(BaseLLMClient):
         self._torch = torch
 
         self._processor = AutoProcessor.from_pretrained(model)
-        self._model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+        self._model = AutoModelForImageTextToText.from_pretrained(
             model,
             torch_dtype=torch.float16 if device != "cpu" else torch.float32,
             device_map=device,
@@ -186,11 +203,6 @@ class QwenLocalAdapter(BaseLLMClient):
                 if ext in (".jpg", ".jpeg", ".png", ".webp", ".bmp"):
                     content.append({"type": "image", "image": Image.open(path).convert("RGB")})
                 elif ext == ".pdf":
-                    # Convert first page to image via pypdf + PIL
-                    import io
-                    import pypdf
-                    reader = pypdf.PdfReader(path)
-                    # Extract as image using pdfplumber if available, else skip
                     try:
                         import pdfplumber
                         with pdfplumber.open(path) as pdf:

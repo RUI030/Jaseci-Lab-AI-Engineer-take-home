@@ -1,0 +1,13 @@
+# Extra dependencies for model_id: "qwen_local" (local GPU inference).
+# Not needed when using model_id: "gemini" or "qwen" (API adapters).
+#
+# Install with:
+#   pip install -r requirements.txt -r requirements_localmodel.txt
+#
+# Hardware: CUDA GPU (8 GB+ VRAM for 3B, 16 GB+ for 7B) or Apple Silicon MPS.
+
+transformers>=4.51.0
+torch>=2.2.0
+torchvision>=0.17.0
+accelerate>=0.30.0
+qwen-vl-utils>=0.0.8

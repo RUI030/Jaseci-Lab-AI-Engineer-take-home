@@ -85,7 +85,7 @@ def test_gemini_generate_with_files(monkeypatch):
 
     result = adapter.generate("Extract fields", _SampleSchema, files=["some/path.pdf"])
     assert result["doc_type"] == "police_report"
-    adapter._client.files.upload.assert_called_once_with(path="some/path.pdf")
+    adapter._client.files.upload.assert_called_once_with(file="some/path.pdf")
 
 
 def test_gemini_generate_no_files(monkeypatch):

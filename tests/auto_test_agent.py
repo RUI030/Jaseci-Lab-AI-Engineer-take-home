@@ -42,11 +42,15 @@ def test_agent_init_loads_config(monkeypatch):
 
 
 def test_agent_init_uses_model_from_settings(monkeypatch):
-    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+    import yaml
+    from pathlib import Path
+    settings_path = Path(__file__).parent.parent / "config" / "settings.yaml"
+    model_id = yaml.safe_load(settings_path.read_text())["model_id"]
+
     with patch("core.llm_adapters.LLMClientFactory.get_client") as mock_factory:
         mock_factory.return_value = MagicMock()
         agent = ClaimAgent(chatbot=Chatbot())
-    mock_factory.assert_called_once_with("gemini")
+    mock_factory.assert_called_once_with(model_id)
 
 
 # --- process_claim ---

@@ -31,11 +31,16 @@ pytest tests/ -v -k "not integration"
 pytest tests/integration/ -v -m integration
 
 # Single test file
-pytest tests/test_agent.py -v
+pytest tests/auto_test_agent.py -v
 
 # Single test by name
-pytest tests/test_parser.py -v -k "test_cross_validate"
+pytest tests/auto_test_parser.py -v -k "test_cross_validate"
+
+# Interactive demo (human-verified, requires jupyter)
+jupyter notebook demo/demo_doc_parsing.ipynb
 ```
+
+Test files use the `auto_test_*.py` prefix (not `test_*.py`). Interactive demos that require human review live in `demo/` as Jupyter notebooks.
 
 ## Architecture
 
