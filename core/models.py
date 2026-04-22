@@ -11,6 +11,7 @@ class FieldSchema(BaseModel):
     data_type: str
     field_role: Literal["required", "optional"]
     validation_rule: str
+    validation_pattern: str | None = None  # regex applied after LLM extraction; None = no structural check
     unify_instruction: str
     description: str
 
@@ -59,6 +60,7 @@ class ValidationIssue(BaseModel):
     description: str
     sources: list[str] = Field(default_factory=list)
     values: dict[str, str] = Field(default_factory=dict)
+    resubmit_doc: str | None = None  # file_name of lower-confidence doc to request resubmission
     resolved: bool = False
     resolved_by: Literal["upload", "human_verified"] | None = None
     resolved_at: str | None = None

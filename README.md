@@ -77,9 +77,16 @@ python main.py --claim claims/CLM-001
 
 # Process all claims and display priority ranking
 python main.py --all
+
+# Force re-processing, ignoring any cached results
+python main.py --all --no-cache
+python main.py --claim claims/CLM-001 --no-cache
 ```
 
-Claim state is persisted to `<claim_folder>/.cache/claim_state.json` after each run.
+Results are cached to `<claim_folder>/.cache/claim_state.json` after each run. On subsequent runs:
+- `complete` claims are loaded from cache and skipped.
+- `incomplete` and `pending` claims are always re-processed (new documents may have been added).
+- `--no-cache` forces a full re-run for every claim, including complete ones.
 
 ---
 
@@ -123,3 +130,4 @@ jupyter notebook demo/demo_doc_parsing.ipynb
 - Persistent state store (`claim_state.json` → PostgreSQL or Redis)
 - Web UI (replace `Chatbot` with FastAPI + Gradio; `Claim` already serialises to JSON via Pydantic)
 - Jac/byLLM integration (Jaseci ecosystem)
+- Content-based document type classification: the current approach uses the filename as a hint and asks the VLM to infer doc type from content. A more robust approach would be a dedicated lightweight classifier (fine-tuned BERT or a small VLM) trained on labelled insurance documents, decoupling type detection from field extraction and making it resilient to arbitrary filenames.

@@ -24,6 +24,12 @@ issue_fragments:
     {inconsistency_details}
     Could you confirm which value is correct?
 
+  resubmit_document: |
+    A significant discrepancy was found in field "{field_name}". The document
+    "{resubmit_doc}" appears to have lower reliability. Please re-submit a clearer copy.
+    If you believe the document is correct as submitted, reply to confirm — otherwise our
+    team will take over the review.
+
   field_inconsistency_warning: |
     Note: a low-confidence discrepancy was detected in field "{field_name}" and has been
     flagged for staff review. No action is required from you at this time.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import tempfile
 import time
 from abc import ABC, abstractmethod
@@ -66,18 +67,36 @@ _DOC_ROLE = {
 
 
 # R3: Unified parameter name to `schemas` (was `target_fields`)
-def _build_prompt(schemas: list[FieldSchema], context_note: str = "") -> str:
+_DOC_TYPE_DESCRIPTIONS = """Valid doc_type values — choose the best match:
+  - police_report       : official law enforcement accident or incident report
+  - finance_agreement   : vehicle purchase contract or loan / financing agreement
+  - settlement_breakdown: insurance settlement statement or payout calculation
+  - customer_reply      : correspondence or message from the claimant / customer
+  - unknown             : anything that does not clearly match the above"""
+
+
+def _build_prompt(
+    schemas: list[FieldSchema],
+    context_note: str = "",
+    filename: str = "",
+) -> str:
     field_lines = "\n".join(
         f"  - {f.field_name} ({f.data_type}): {f.description}\n"
         f"    Validation: {f.validation_rule}\n"
         f"    Unify instruction: {f.unify_instruction}"
         for f in schemas
     )
-    context_block = f"\nContext: {context_note}\n" if context_note else ""
+    context_parts = []
+    if filename:
+        context_parts.append(f"Filename: {filename}")
+    if context_note:
+        context_parts.append(context_note)
+    context_block = ("\nContext: " + " | ".join(context_parts) + "\n") if context_parts else ""
     return (
         f"You are an AI assistant extracting structured data from an insurance document.{context_block}\n"
         "Instructions:\n"
-        "1. Identify the document type.\n"
+        f"1. Identify the document type using the filename hint (if provided) and the document content.\n"
+        f"{_DOC_TYPE_DESCRIPTIONS}\n\n"
         "2. Extract the following fields if present:\n"
         f"{field_lines}\n\n"
         "For each field:\n"
@@ -88,6 +107,23 @@ def _build_prompt(schemas: list[FieldSchema], context_note: str = "") -> str:
         "  - Provide a confidence_note or validation_note when the value is not high or not valid.\n"
         "Return ONLY valid JSON matching the required schema."
     )
+
+
+def _check_pattern(
+    unified_value: str,
+    pattern: str,
+) -> bool:
+    """Return True if unified_value matches the pattern (case-insensitive)."""
+    return bool(re.fullmatch(pattern, unified_value, re.IGNORECASE))
+
+
+def _is_zero_value(value: str | None) -> bool:
+    if value is None:
+        return False
+    try:
+        return float(value) == 0.0
+    except ValueError:
+        return False
 
 
 def _response_to_extracted_fields(
@@ -101,18 +137,44 @@ def _response_to_extracted_fields(
         schema = schema_map.get(item["field_name"])
         role = schema.field_role if schema else "discovered"
         data_type = schema.data_type if schema else "string"
+
+        unified_value = item.get("unified_value")
+        valid = item.get("valid", False)
+        validation_note = item.get("validation_note")  # must be assigned before pattern check below
+        confidence = item.get("confidence", "low")
+        confidence_note = item.get("confidence_note")
+
+        # Zero monetary values indicate the field was not meaningfully present
+        if data_type == "number" and _is_zero_value(unified_value):
+            unified_value = None
+            valid = False
+            confidence = "low"
+            note = "Zero value treated as not present in document."
+            confidence_note = f"{confidence_note} {note}".strip() if confidence_note else note
+
+        # Structural regex check — overrides LLM valid=True for format failures
+        pattern = schema.validation_pattern if schema else None
+        if pattern and unified_value is not None and not _check_pattern(unified_value, pattern):
+            valid = False
+            pat_note = f"Value '{unified_value}' does not match expected format ({pattern})."
+            validation_note = f"{validation_note} {pat_note}".strip() if validation_note else pat_note
+            if confidence == "high":
+                confidence = "medium"
+                conf_note = "Confidence capped: structural format check failed."
+                confidence_note = f"{confidence_note} {conf_note}".strip() if confidence_note else conf_note
+
         result.append(
             ExtractedField(
                 field_name=item["field_name"],
                 field_role=role,
                 source_trust=source_trust,
                 origin_value=item.get("origin_value"),
-                unified_value=item.get("unified_value"),
+                unified_value=unified_value,
                 data_type=data_type,
-                valid=item.get("valid", False),
-                validation_note=item.get("validation_note"),
-                confidence=item.get("confidence", "low"),
-                confidence_note=item.get("confidence_note"),
+                valid=valid,
+                validation_note=validation_note,
+                confidence=confidence,
+                confidence_note=confidence_note,
             )
         )
     return result
@@ -198,9 +260,17 @@ class PDFReader(BaseDocReader):
             record.content_hash = content_hash
             return record
 
-        prompt = _build_prompt(schemas, context_note="This is a machine-readable PDF.")
+        # Send extracted text rather than the PDF file so the VLM receives
+        # unambiguous machine-readable content and can assign high confidence.
+        wrapped = f"<document>\n{text}\n</document>"
+        prompt = _build_prompt(
+            schemas,
+            context_note="This is machine-readable text extracted from a PDF. Confidence should be high for found values.",
+            filename=Path(file_path).name,
+        )
+        full_prompt = f"{prompt}\n\nDocument content:\n{wrapped}"
         try:
-            response = self.call_vlm(prompt, files=[file_path], client=client)
+            response = self.call_vlm(full_prompt, files=None, client=client)
             parse_status = "complete"
         except ParseFailedError as exc:
             return self._failed_record(file_path, exc, content_hash, text)
@@ -268,6 +338,7 @@ class ImageReader(BaseDocReader):
         prompt = _build_prompt(
             schemas,
             context_note="This is a scanned image — OCR may have errors. Confidence should be at most medium.",
+            filename=Path(file_path).name,
         )
         try:
             response = self.call_vlm(prompt, files=[processed_path], client=client)

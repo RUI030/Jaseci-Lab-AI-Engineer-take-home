@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 from datetime import datetime, timezone
 from typing import Literal
@@ -14,6 +15,20 @@ from core.models import (
     FieldSchema,
     ValidationIssue,
 )
+
+_CONF_WEIGHT: dict[str, int] = {"high": 3, "medium": 2, "low": 1}
+_VIN_PATTERN = r"^[A-Z0-9]{17}$"   # standard 17-char alphanumeric VIN (case-insensitive)
+_MONEY_PCT_THRESHOLD = 10.0         # percentage difference above which money values are "significant"
+
+
+def _pct_diff(a: str, b: str) -> float:
+    """Percentage difference between two numeric strings relative to the larger value."""
+    try:
+        fa, fb = float(a), float(b)
+        denom = max(abs(fa), abs(fb))
+        return 0.0 if denom == 0 else abs(fa - fb) / denom * 100.0
+    except ValueError:
+        return 100.0
 
 REQUIRED_DOC_TYPES = ["police_report", "finance_agreement", "settlement_breakdown"]
 
@@ -34,17 +49,18 @@ class ClaimParser:
         Only considers fields where source_trust == 'document'. Never modifies
         confidence values. Returns only the new ValidationIssues added this round.
 
-        Severity rules:
-          - 'blocking': two or more medium/high confidence sources disagree.
-          - 'warning':  only low-confidence sources are involved in the conflict,
-                        or a single low-confidence source disagrees with a
-                        high/medium-confidence consensus. Company is notified but
-                        the claim is not held up.
+        Algorithm (per field):
+          1. Weighted vote: high=3, medium=2, low=1. If the winning value holds
+             a strict weight majority (>50%), it is trusted → severity='warning'.
+          2. No clear majority, exactly 2 sources:
+             - VIN (string): char diff > 6 → 'blocking' + resubmit lower-confidence doc.
+             - number: diff > 10% → 'blocking' + resubmit; diff ≤ 10% → 'warning',
+               note to trust the smaller value.
+             - other types → 'blocking' + resubmit lower-confidence doc (if identifiable).
+          3. No clear majority, 3+ sources → 'blocking'.
         """
-        _CONF_RANK = {"high": 2, "medium": 1, "low": 0}
-
-        # field_name -> {file_name: (unified_value, confidence)}
-        field_data: dict[str, dict[str, tuple[str, str]]] = {}
+        # field_name -> {file_name: (unified_value, confidence, data_type)}
+        field_data: dict[str, dict[str, tuple[str, str, str]]] = {}
         for record in claim.doc_table:
             if record.parse_status != "complete":
                 continue
@@ -54,11 +70,12 @@ class ClaimParser:
                 field_data.setdefault(field.field_name, {})[record.file_name] = (
                     field.unified_value,
                     field.confidence,
+                    field.data_type,
                 )
 
         new_issues: list[ValidationIssue] = []
         for field_name, source_map in field_data.items():
-            values_only = {f: v for f, (v, _) in source_map.items()}
+            values_only = {f: v for f, (v, _, _) in source_map.items()}
             if len(set(values_only.values())) <= 1:
                 continue
 
@@ -71,33 +88,148 @@ class ClaimParser:
             if already:
                 continue
 
-            # Count how many medium/high confidence sources have a differing value
-            # from the majority (highest-confidence) value.
-            by_conf = sorted(
-                source_map.items(),
-                key=lambda kv: _CONF_RANK.get(kv[1][1], 0),
-                reverse=True,
-            )
-            top_value = by_conf[0][1][0]
-            strong_dissenters = sum(
-                1
-                for _, (v, c) in source_map.items()
-                if v != top_value and _CONF_RANK.get(c, 0) >= 1
-            )
-            severity = "blocking" if strong_dissenters >= 1 else "warning"
+            # --- weighted voting ---
+            weighted: dict[str, int] = {}
+            for _, (val, conf, _) in source_map.items():
+                weighted[val] = weighted.get(val, 0) + _CONF_WEIGHT.get(conf, 1)
+            total_weight = sum(weighted.values())
+            winner_value = max(weighted, key=lambda v: weighted[v])
+            winner_weight = weighted[winner_value]
+
+            resubmit_doc: str | None = None
+
+            if winner_weight * 2 > total_weight:
+                # Clear weighted majority — low-confidence minority overruled
+                severity: Literal["blocking", "warning"] = "warning"
+                overruled = ", ".join(
+                    f"{f}: {v} (confidence={c})"
+                    for f, (v, c, _) in source_map.items()
+                    if v != winner_value
+                )
+                description = (
+                    f"Field '{field_name}' has conflicting values; "
+                    f"trusted value '{winner_value}' (confidence-weighted majority). "
+                    f"Overruled: {overruled}."
+                )
+            else:
+                # No clear majority — apply significance checks
+                items = list(source_map.items())
+                data_type = items[0][1][2]  # same field → same data_type
+
+                resubmit_doc = None
+
+                if data_type == "string" and "vin" in field_name.lower():
+                    # Regex validity is a stronger signal than confidence weights for VINs.
+                    # Filter to sources whose value passes the VIN format check first;
+                    # then weighted-vote among those. If none pass, block.
+                    valid_sources = {
+                        f: (v, c)
+                        for f, (v, c, _) in source_map.items()
+                        if re.fullmatch(_VIN_PATTERN, v, re.IGNORECASE)
+                    }
+                    if not valid_sources:
+                        # No structurally valid VIN anywhere — must resubmit
+                        min_w = min(_CONF_WEIGHT.get(c, 1) for _, (_, c, _) in source_map.items())
+                        lowest = [f for f, (_, c, _) in source_map.items() if _CONF_WEIGHT.get(c, 1) == min_w]
+                        resubmit_doc = lowest[0] if len(lowest) == 1 else None
+                        severity = "blocking"
+                        description = (
+                            f"Field '{field_name}': no source contains a valid 17-character "
+                            "alphanumeric VIN. Values: "
+                            + ", ".join(f"'{f}': '{v}'" for f, (v, _, _) in source_map.items())
+                            + "."
+                        )
+                    elif len(valid_sources) == 1:
+                        # Exactly one structurally valid VIN — trust it unconditionally
+                        trusted_file, (trusted_value, _) = next(iter(valid_sources.items()))
+                        invalid = [
+                            (f, v) for f, (v, _, _) in source_map.items()
+                            if f not in valid_sources
+                        ]
+                        severity = "warning"
+                        description = (
+                            f"Field '{field_name}': trusted value '{trusted_value}' "
+                            f"from '{trusted_file}' (only structurally valid VIN). "
+                            + "; ".join(
+                                f"'{f}': '{v}' is not a valid 17-char VIN"
+                                for f, v in invalid
+                            )
+                            + "."
+                        )
+                    else:
+                        # Multiple valid VINs — weighted vote among regex-passing sources
+                        valid_weighted: dict[str, int] = {}
+                        for _, (v, c) in valid_sources.items():
+                            valid_weighted[v] = valid_weighted.get(v, 0) + _CONF_WEIGHT.get(c, 1)
+                        vin_winner = max(valid_weighted, key=lambda v: valid_weighted[v])
+                        severity = "warning"
+                        description = (
+                            f"Field '{field_name}': multiple valid VINs found; "
+                            f"confidence-weighted trusted value is '{vin_winner}'. "
+                            "Sources: "
+                            + ", ".join(
+                                f"'{f}': '{v}' (confidence={c})"
+                                for f, (v, c) in valid_sources.items()
+                            )
+                            + "."
+                        )
+
+                elif len(items) == 2:
+                    f1, (v1, c1, _) = items[0]
+                    f2, (v2, c2, _) = items[1]
+                    w1 = _CONF_WEIGHT.get(c1, 1)
+                    w2 = _CONF_WEIGHT.get(c2, 1)
+                    lower_conf_doc = f1 if w1 < w2 else (f2 if w2 < w1 else None)
+
+                    if data_type == "number":
+                        pct = _pct_diff(v1, v2)
+                        if pct <= _MONEY_PCT_THRESHOLD:
+                            try:
+                                smaller = str(min(float(v1), float(v2)))
+                            except ValueError:
+                                smaller = v1
+                            severity = "warning"
+                            description = (
+                                f"Field '{field_name}' differs by {pct:.1f}% "
+                                f"({f1}: '{v1}', {f2}: '{v2}') — within {_MONEY_PCT_THRESHOLD}% "
+                                f"tolerance; conservative value '{smaller}' recommended."
+                            )
+                        else:
+                            severity = "blocking"
+                            resubmit_doc = lower_conf_doc
+                            description = (
+                                f"Field '{field_name}' has a significant discrepancy "
+                                f"({pct:.1f}%): {f1}: '{v1}', {f2}: '{v2}'."
+                            )
+                    else:
+                        severity = "blocking"
+                        resubmit_doc = lower_conf_doc
+                        description = (
+                            f"Field '{field_name}' has conflicting values: "
+                            f"{f1}: '{v1}' (confidence={c1}), {f2}: '{v2}' (confidence={c2})."
+                        )
+
+                else:
+                    # 3+ sources, no weighted majority
+                    severity = "blocking"
+                    description = (
+                        f"Field '{field_name}' has conflicting values across "
+                        f"{len(items)} sources with no clear majority: "
+                        + ", ".join(
+                            f"{f}: '{v}' (confidence={c})"
+                            for f, (v, c, _) in source_map.items()
+                        )
+                        + "."
+                    )
 
             issue = ValidationIssue(
                 issue_type="inconsistency",
                 severity=severity,
                 field_name=field_name,
-                description=(
-                    f"Field '{field_name}' has different values across documents: "
-                    + ", ".join(
-                        f"{f}: {v} (confidence={c})" for f, (v, c) in source_map.items()
-                    )
-                ),
+                description=description,
                 sources=list(values_only.keys()),
                 values=values_only,
+                resubmit_doc=resubmit_doc,
             )
             claim.validation_issues.append(issue)
             new_issues.append(issue)

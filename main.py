@@ -77,6 +77,10 @@ def main() -> int:
     parser.add_argument(
         "--json", action="store_true", help="Output raw JSON instead of summary"
     )
+    parser.add_argument(
+        "--no-cache", action="store_true", dest="no_cache",
+        help="Ignore cached results and re-process every claim from scratch"
+    )
     args = parser.parse_args()
 
     if not args.claim and not args.all:
@@ -87,7 +91,7 @@ def main() -> int:
     agent = ClaimAgent(chatbot=chatbot)
 
     if args.claim:
-        claim = agent.process_claim(args.claim)
+        claim = agent.process_claim(args.claim, use_cache=not args.no_cache)
         if args.json:
             print(claim.model_dump_json(indent=2))
         else:
@@ -112,7 +116,7 @@ def main() -> int:
     for claim_dir in claim_dirs:
         chatbot.display(f"\nProcessing {claim_dir.name}...")
         try:
-            claim = agent.process_claim(str(claim_dir))
+            claim = agent.process_claim(str(claim_dir), use_cache=not args.no_cache)
             claims.append(claim)
             if args.json:
                 print(claim.model_dump_json(indent=2))

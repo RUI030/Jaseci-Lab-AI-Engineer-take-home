@@ -7,7 +7,7 @@ gemini:
   temperature: 0.0
 
 qwen_local:
-  model: "Qwen/Qwen2.5-VL-3B-Instruct"  # 3B fits on 8GB RAM; use 7B if you have 16GB+
+  model: "Qwen/Qwen3-VL-4B-Instruct"  # 3B fits on 8GB RAM; use 7B if you have 16GB+
   device: "auto"                          # "auto", "cpu", "cuda", or "mps" (Apple Silicon)
   temperature: 0.0
 

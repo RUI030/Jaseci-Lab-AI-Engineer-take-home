@@ -4,6 +4,7 @@
     "data_type": "string",
     "field_role": "required",
     "validation_rule": "Exactly 17 alphanumeric characters, case-insensitive",
+    "validation_pattern": "^[A-Z0-9]{17}$",
     "unify_instruction": "Uppercase, remove all whitespace and hyphens",
     "description": "Vehicle Identification Number of the insured vehicle"
   },
@@ -12,6 +13,7 @@
     "data_type": "date",
     "field_role": "required",
     "validation_rule": "Valid calendar date in YYYY-MM-DD format",
+    "validation_pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
     "unify_instruction": "Normalize to ISO 8601 YYYY-MM-DD. Resolve ambiguous formats using US locale (e.g., 01/02/2024 -> 2024-01-02)",
     "description": "Date the vehicle loss or accident occurred"
   },
@@ -20,6 +22,7 @@
     "data_type": "number",
     "field_role": "required",
     "validation_rule": "Positive numeric value in USD",
+    "validation_pattern": "^\\d+(\\.\\d+)?$",
     "unify_instruction": "Strip currency symbols and commas. Return as string of numeric value only (e.g., '24500.00')",
     "description": "Settlement amount the insurer will pay out"
   },
@@ -28,6 +31,7 @@
     "data_type": "number",
     "field_role": "optional",
     "validation_rule": "Non-negative numeric value in USD",
+    "validation_pattern": "^\\d+(\\.\\d+)?$",
     "unify_instruction": "Strip currency symbols and commas. Return as string of numeric value only (e.g., '18200.00')",
     "description": "Remaining loan balance on the vehicle at time of loss"
   }

@@ -197,13 +197,21 @@ def _build_customer_message(claim: Claim, message_config: dict) -> str:
         if vi.issue_type != "inconsistency" or vi.resolved:
             continue
         if vi.severity == "blocking":
-            details = "\n".join(f"  - {k}: {v}" for k, v in vi.values.items())
-            issue_lines.append(
-                fragments["field_inconsistency"].format(
-                    field_name=vi.field_name or "unknown field",
-                    inconsistency_details=details,
-                ).strip()
-            )
+            if vi.resubmit_doc:
+                issue_lines.append(
+                    fragments["resubmit_document"].format(
+                        field_name=vi.field_name or "unknown field",
+                        resubmit_doc=vi.resubmit_doc,
+                    ).strip()
+                )
+            else:
+                details = "\n".join(f"  - {k}: {v}" for k, v in vi.values.items())
+                issue_lines.append(
+                    fragments["field_inconsistency"].format(
+                        field_name=vi.field_name or "unknown field",
+                        inconsistency_details=details,
+                    ).strip()
+                )
         else:
             issue_lines.append(
                 fragments["field_inconsistency_warning"].format(
@@ -249,8 +257,15 @@ def node_accept_reply(state: ClaimState) -> ClaimState:
     if reply_text.strip():
         parser.handle_reply(claim, reply_text, client, state["field_schemas"])
         skipped = False
-    # M5: set reply_skipped explicitly before returning so LangGraph sees the update
-    # regardless of whether it treats the returned dict as a merge or reference.
+    else:
+        # Customer skipped — if any open resubmit request exists, treat as refusal → human review
+        has_resubmit = any(
+            vi.resubmit_doc and not vi.resolved
+            for vi in claim.validation_issues
+        )
+        if has_resubmit:
+            claim.status = "pending"
+
     state["reply_skipped"] = skipped
     return state
 
@@ -335,10 +350,23 @@ class ClaimAgent:
         return graph.compile()
 
     def process_claim(
-        self, folder_path: str, uploaded_at: str | None = None
+        self,
+        folder_path: str,
+        uploaded_at: str | None = None,
+        use_cache: bool = True,
     ) -> Claim:
         folder = Path(folder_path)
         claim_id = folder.name
+
+        cache_path = folder / ".cache" / "claim_state.json"
+        if use_cache and cache_path.exists():
+            cached = Claim.model_validate_json(cache_path.read_text())
+            if cached.status == "complete":
+                self.chatbot.display(f"  [cache] {claim_id} is complete — loaded from cache.")
+                return cached
+            self.chatbot.display(
+                f"  [cache] {claim_id} has status '{cached.status}' — re-processing."
+            )
 
         if uploaded_at is None:
             mtime = folder.stat().st_mtime
