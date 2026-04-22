@@ -59,7 +59,7 @@ class GeminiAdapter(BaseLLMClient):
 
     def _upload_file(self, file_path: str):
         """Upload a file and wait until it reaches ACTIVE state (max 30 s)."""
-        uploaded = self._client.files.upload(path=file_path)
+        uploaded = self._client.files.upload(file=file_path)
         deadline = time.time() + 30
         while uploaded.state.name != "ACTIVE":
             if time.time() > deadline:
@@ -158,6 +158,109 @@ class QwenAdapter(BaseLLMClient):
             ) from exc
 
 
+class QwenLocalAdapter(BaseLLMClient):
+    """Runs a Qwen2.5-VL model locally via Hugging Face transformers."""
+
+    def __init__(self, model: str, device: str = "auto", temperature: float = 0.0) -> None:
+        from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
+        import torch
+
+        self._model_name = model
+        self._temperature = temperature
+        self._torch = torch
+
+        self._processor = AutoProcessor.from_pretrained(model)
+        self._model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+            model,
+            torch_dtype=torch.float16 if device != "cpu" else torch.float32,
+            device_map=device,
+        )
+
+    def _build_messages(self, prompt: str, files: list[str] | None) -> list[dict]:
+        from PIL import Image
+
+        content: list[dict] = []
+        if files:
+            for path in files:
+                ext = Path(path).suffix.lower()
+                if ext in (".jpg", ".jpeg", ".png", ".webp", ".bmp"):
+                    content.append({"type": "image", "image": Image.open(path).convert("RGB")})
+                elif ext == ".pdf":
+                    # Convert first page to image via pypdf + PIL
+                    import io
+                    import pypdf
+                    reader = pypdf.PdfReader(path)
+                    # Extract as image using pdfplumber if available, else skip
+                    try:
+                        import pdfplumber
+                        with pdfplumber.open(path) as pdf:
+                            for page in pdf.pages:
+                                img = page.to_image(resolution=150).original
+                                content.append({"type": "image", "image": img.convert("RGB")})
+                    except Exception:
+                        pass
+        content.append({"type": "text", "text": prompt})
+        return [{"role": "user", "content": content}]
+
+    def generate(
+        self,
+        prompt: str,
+        response_schema: type[BaseModel],
+        files: list[str] | None = None,
+    ) -> dict:
+        from qwen_vl_utils import process_vision_info
+
+        schema_json = json.dumps(response_schema.model_json_schema(), indent=2)
+        full_prompt = (
+            f"{prompt}\n\n"
+            f"You MUST respond with valid JSON only — no markdown, no explanation.\n"
+            f"The JSON must exactly match this schema:\n{schema_json}"
+        )
+
+        messages = self._build_messages(full_prompt, files)
+        text = self._processor.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+        image_inputs, video_inputs = process_vision_info(messages)
+        inputs = self._processor(
+            text=[text],
+            images=image_inputs,
+            videos=video_inputs,
+            padding=True,
+            return_tensors="pt",
+        ).to(self._model.device)
+
+        do_sample = self._temperature > 0.0
+        output_ids = self._model.generate(
+            **inputs,
+            max_new_tokens=1024,
+            do_sample=do_sample,
+            temperature=self._temperature if do_sample else None,
+        )
+        # Strip input tokens from output
+        trimmed = [
+            out[len(inp):]
+            for inp, out in zip(inputs.input_ids, output_ids)
+        ]
+        raw = self._processor.batch_decode(
+            trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
+        )[0].strip()
+
+        # Strip markdown code fences if present
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+            raw = raw.strip()
+
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ParseFailedError(
+                f"QwenLocal returned malformed JSON: {exc}\nRaw output: {raw[:300]}"
+            ) from exc
+
+
 class LLMClientFactory:
     @staticmethod
     def get_client(model_id: str) -> BaseLLMClient:
@@ -175,6 +278,13 @@ class LLMClientFactory:
                 base_url=cfg.get("base_url", ""),
                 temperature=cfg.get("temperature", 0.0),
             )
+        if model_id == "qwen_local":
+            cfg = settings.get("qwen_local", {})
+            return QwenLocalAdapter(
+                model=cfg.get("model", "Qwen/Qwen2.5-VL-3B-Instruct"),
+                device=cfg.get("device", "auto"),
+                temperature=cfg.get("temperature", 0.0),
+            )
         raise UnsupportedModelError(
-            f"Unsupported model_id '{model_id}'. Supported: gemini, qwen"
+            f"Unsupported model_id '{model_id}'. Supported: gemini, qwen, qwen_local"
         )

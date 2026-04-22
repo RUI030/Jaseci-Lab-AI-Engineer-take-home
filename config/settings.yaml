@@ -1,4 +1,4 @@
-model_id: "gemini"
+model_id: "qwen_local"
 pdf_text_threshold: 100  # characters; below this PDFReader falls back to ImageReader
 
 gemini:
@@ -8,4 +8,9 @@ gemini:
 qwen:
   model: "qwen-vl-max"
   base_url: ""   # override via QWEN_BASE_URL env var
+  temperature: 0.0
+
+qwen_local:
+  model: "Qwen/Qwen2.5-VL-3B-Instruct"  # 3B fits on 8GB RAM; use 7B if you have 16GB+
+  device: "auto"                          # "auto", "cpu", "cuda", or "mps" (Apple Silicon)
   temperature: 0.0
