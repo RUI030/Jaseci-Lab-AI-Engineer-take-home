@@ -54,6 +54,7 @@ class DocRecord(BaseModel):
 
 class ValidationIssue(BaseModel):
     issue_type: Literal["inconsistency", "missing", "invalid", "low_confidence"]
+    severity: Literal["blocking", "warning"] = "blocking"
     field_name: str | None = None
     description: str
     sources: list[str] = Field(default_factory=list)

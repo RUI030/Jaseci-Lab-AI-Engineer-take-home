@@ -33,27 +33,35 @@ class ClaimParser:
 
         Only considers fields where source_trust == 'document'. Never modifies
         confidence values. Returns only the new ValidationIssues added this round.
+
+        Severity rules:
+          - 'blocking': two or more medium/high confidence sources disagree.
+          - 'warning':  only low-confidence sources are involved in the conflict,
+                        or a single low-confidence source disagrees with a
+                        high/medium-confidence consensus. Company is notified but
+                        the claim is not held up.
         """
-        # Gather all doc-sourced extracted fields grouped by field_name
-        field_values: dict[str, dict[str, str]] = {}  # field_name -> {file_name: unified_value}
+        _CONF_RANK = {"high": 2, "medium": 1, "low": 0}
+
+        # field_name -> {file_name: (unified_value, confidence)}
+        field_data: dict[str, dict[str, tuple[str, str]]] = {}
         for record in claim.doc_table:
             if record.parse_status != "complete":
                 continue
             for field in record.fields:
-                if field.source_trust != "document":
+                if field.source_trust != "document" or field.unified_value is None:
                     continue
-                if field.unified_value is None:
-                    continue
-                field_values.setdefault(field.field_name, {})[record.file_name] = (
-                    field.unified_value
+                field_data.setdefault(field.field_name, {})[record.file_name] = (
+                    field.unified_value,
+                    field.confidence,
                 )
 
         new_issues: list[ValidationIssue] = []
-        for field_name, source_map in field_values.items():
-            distinct_values = set(source_map.values())
-            if len(distinct_values) <= 1:
+        for field_name, source_map in field_data.items():
+            values_only = {f: v for f, (v, _) in source_map.items()}
+            if len(set(values_only.values())) <= 1:
                 continue
-            # Check if an equivalent issue already exists (avoid duplicates)
+
             already = any(
                 vi.field_name == field_name
                 and vi.issue_type == "inconsistency"
@@ -62,15 +70,34 @@ class ClaimParser:
             )
             if already:
                 continue
+
+            # Count how many medium/high confidence sources have a differing value
+            # from the majority (highest-confidence) value.
+            by_conf = sorted(
+                source_map.items(),
+                key=lambda kv: _CONF_RANK.get(kv[1][1], 0),
+                reverse=True,
+            )
+            top_value = by_conf[0][1][0]
+            strong_dissenters = sum(
+                1
+                for _, (v, c) in source_map.items()
+                if v != top_value and _CONF_RANK.get(c, 0) >= 1
+            )
+            severity = "blocking" if strong_dissenters >= 1 else "warning"
+
             issue = ValidationIssue(
                 issue_type="inconsistency",
+                severity=severity,
                 field_name=field_name,
                 description=(
                     f"Field '{field_name}' has different values across documents: "
-                    + ", ".join(f"{f}: {v}" for f, v in source_map.items())
+                    + ", ".join(
+                        f"{f}: {v} (confidence={c})" for f, (v, c) in source_map.items()
+                    )
                 ),
-                sources=list(source_map.keys()),
-                values=dict(source_map),
+                sources=list(values_only.keys()),
+                values=values_only,
             )
             claim.validation_issues.append(issue)
             new_issues.append(issue)
@@ -103,18 +130,20 @@ class ClaimParser:
             return "pending"
 
         # Single pass over validation_issues for all unresolved types
-        unresolved_inconsistencies = []
+        blocking_inconsistencies = []
         low_conf_issues = []
         for vi in claim.validation_issues:
             if vi.resolved:
                 continue
-            if vi.issue_type == "inconsistency":
-                unresolved_inconsistencies.append(vi)
+            if vi.issue_type == "inconsistency" and vi.severity == "blocking":
+                blocking_inconsistencies.append(vi)
             elif vi.issue_type == "low_confidence":
                 low_conf_issues.append(vi)
+        # Warning-severity inconsistencies are logged for staff review but do not
+        # affect routing — only blocking ones change the claim status.
 
-        # 4/5. Inconsistency — incomplete before first reply, pending after
-        if unresolved_inconsistencies:
+        # 4/5. Blocking inconsistency — incomplete before first reply, pending after
+        if blocking_inconsistencies:
             return "pending" if claim.reply_count > 0 else "incomplete"
 
         # 6. Parse failed

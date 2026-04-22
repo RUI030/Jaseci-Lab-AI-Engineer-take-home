@@ -1,53 +1,40 @@
-templates:
+customer_email: |
+  Hello,
+
+  We are writing regarding your claim {claim_id}. Please see the update(s) below:
+
+  {issues_body}
+
+  If you have any questions, please do not hesitate to reach out.
+
+  Best regards,
+  Claims Processing Team
+
+issue_fragments:
   missing_document: |
-    Hello,
-
-    We are processing your claim {claim_id}. To continue, we need the following
-    document(s): {missing_docs}.
-
-    Please upload these at your earliest convenience.
-
-    Best regards,
-    Claims Processing Team
-
-  field_inconsistency: |
-    Hello,
-
-    We noticed a discrepancy in the information provided for claim {claim_id}.
-    The field "{field_name}" has different values across your submitted documents:
-    {inconsistency_details}
-
-    Could you confirm which value is correct?
-
-    Best regards,
-    Claims Processing Team
+    Missing document(s): {missing_docs}
+    Please upload the required document(s) at your earliest convenience.
 
   parse_failed: |
-    Hello,
+    We were unable to process the following document(s): {failed_docs}
+    Please re-submit clear, legible copies.
 
-    We were unable to process one or more documents in your claim {claim_id}
-    ({failed_docs}). Please re-submit clear, legible copies.
+  field_inconsistency: |
+    Discrepancy detected in field "{field_name}":
+    {inconsistency_details}
+    Could you confirm which value is correct?
 
-    Best regards,
-    Claims Processing Team
+  field_inconsistency_warning: |
+    Note: a low-confidence discrepancy was detected in field "{field_name}" and has been
+    flagged for staff review. No action is required from you at this time.
 
   pending_review: |
-    Hello,
-
-    Your claim {claim_id} has been flagged for review by our team.
-    We will contact you within 2-3 business days.
-
-    Best regards,
-    Claims Processing Team
+    Your claim has been flagged for internal review. Our team will follow up within
+    2-3 business days.
 
   complete: |
-    Hello,
-
-    Great news! Your claim {claim_id} has been reviewed and all documents
-    and fields are in order. We will proceed with finalizing your claim.
-
-    Best regards,
-    Claims Processing Team
+    Great news — all documents and fields are in order. We will proceed with
+    finalising your claim shortly.
 
 priority_reason:
   complete_oldest: "All required documents present and valid — ready to finalize. Oldest submission prioritized."

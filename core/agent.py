@@ -1,16 +1,14 @@
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import yaml
 from langgraph.graph import END, StateGraph
 from typing_extensions import TypedDict
 
 from core.chatbot import Chatbot
-from core.doc_reader import get_doc_reader, _hash_file  # D1: factory fn; R2: renamed hash helper
+from core.doc_reader import get_doc_reader, _hash_file
 from core.llm_adapters import BaseLLMClient, LLMClientFactory
 from core.models import (
     Claim,
@@ -20,19 +18,7 @@ from core.models import (
     PriorityRecord,
 )
 from core.parser import REQUIRED_DOC_TYPES, ClaimParser
-
-
-def _load_yaml(relative_path: str) -> dict:
-    base = Path(__file__).parent.parent
-    with open(base / relative_path) as f:
-        return yaml.safe_load(f)
-
-
-def _load_field_schemas() -> list[FieldSchema]:
-    # R1: import json moved to module top
-    base = Path(__file__).parent.parent
-    data = json.loads((base / "config" / "field_schema.json").read_text())
-    return [FieldSchema(**item) for item in data]
+from core.utils import load_yaml, load_field_schemas
 
 
 # --- LangGraph state ---
@@ -181,59 +167,55 @@ def node_cross_validate(state: ClaimState) -> ClaimState:
 
 
 def _build_customer_message(claim: Claim, message_config: dict) -> str:
-    templates = message_config.get("templates", {})
-    parts: list[str] = []
+    """Assemble a single unified email from individual issue fragments."""
+    fragments = message_config.get("issue_fragments")
+    if not fragments:
+        raise KeyError("messages.yaml is missing required 'issue_fragments' section")
+    email_tmpl = message_config.get("customer_email")
+    if not email_tmpl:
+        raise KeyError("messages.yaml is missing required 'customer_email' template")
 
-    missing_docs = [
-        r.doc_type
-        for r in claim.doc_table
-        if r.doc_status == "missing"
-    ]
+    issue_lines: list[str] = []
+
+    missing_docs = [r.doc_type for r in claim.doc_table if r.doc_status == "missing"]
     if missing_docs:
-        tmpl = templates.get("missing_document", "Missing documents: {missing_docs}")
-        parts.append(
-            tmpl.format(
-                claim_id=claim.claim_id,
-                missing_docs=", ".join(missing_docs),
-            )
+        issue_lines.append(
+            fragments["missing_document"].format(
+                missing_docs=", ".join(missing_docs)
+            ).strip()
         )
 
-    parse_failed_docs = [
-        r.file_name
-        for r in claim.doc_table
-        if r.parse_status == "parse_failed"
-    ]
+    parse_failed_docs = [r.file_name for r in claim.doc_table if r.parse_status == "parse_failed"]
     if parse_failed_docs:
-        tmpl = templates.get("parse_failed", "Parse failed: {failed_docs}")
-        parts.append(
-            tmpl.format(
-                claim_id=claim.claim_id,
-                failed_docs=", ".join(parse_failed_docs),
-            )
+        issue_lines.append(
+            fragments["parse_failed"].format(
+                failed_docs=", ".join(parse_failed_docs)
+            ).strip()
         )
 
-    unresolved_inconsistencies = [
-        vi for vi in claim.validation_issues
-        if vi.issue_type == "inconsistency" and not vi.resolved
-    ]
-    for vi in unresolved_inconsistencies:
-        tmpl = templates.get("field_inconsistency", "Inconsistency in {field_name}")
-        details = "; ".join(f"{k}: {v}" for k, v in vi.values.items())
-        parts.append(
-            tmpl.format(
-                claim_id=claim.claim_id,
-                field_name=vi.field_name or "unknown field",
-                inconsistency_details=details,
+    for vi in claim.validation_issues:
+        if vi.issue_type != "inconsistency" or vi.resolved:
+            continue
+        if vi.severity == "blocking":
+            details = "\n".join(f"  - {k}: {v}" for k, v in vi.values.items())
+            issue_lines.append(
+                fragments["field_inconsistency"].format(
+                    field_name=vi.field_name or "unknown field",
+                    inconsistency_details=details,
+                ).strip()
             )
-        )
+        else:
+            issue_lines.append(
+                fragments["field_inconsistency_warning"].format(
+                    field_name=vi.field_name or "unknown field",
+                ).strip()
+            )
 
-    if claim.status == "pending" and not parts:
-        tmpl = templates.get("pending_review", "Claim {claim_id} is under review.")
-        parts.append(tmpl.format(claim_id=claim.claim_id))
+    if claim.status == "pending" and not issue_lines:
+        issue_lines.append(fragments["pending_review"].strip())
 
-    # M2: the "complete" fallback is unreachable — this node only fires for
-    # incomplete/pending claims, so parts is always non-empty here.
-    return "\n\n---\n\n".join(parts)
+    issues_body = "\n\n".join(f"{i + 1}. {line}" for i, line in enumerate(issue_lines))
+    return email_tmpl.format(claim_id=claim.claim_id, issues_body=issues_body).strip()
 
 
 def node_generate_message(state: ClaimState) -> ClaimState:
@@ -320,11 +302,11 @@ def _priority_key(claim: Claim) -> int:
 class ClaimAgent:
     def __init__(self, chatbot: Chatbot) -> None:
         self.chatbot = chatbot
-        self.workflow_config = _load_yaml("config/workflow.yaml")
-        self.message_config = _load_yaml("config/messages.yaml")
-        self.field_schemas = _load_field_schemas()
+        self.workflow_config = load_yaml("config/workflow.yaml")
+        self.message_config = load_yaml("config/messages.yaml")
+        self.field_schemas = load_field_schemas()
 
-        settings = _load_yaml("config/settings.yaml")
+        settings = load_yaml("config/settings.yaml")
         model_id = settings.get("model_id", "gemini")
         self.llm_client: BaseLLMClient = LLMClientFactory.get_client(model_id)
 

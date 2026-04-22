@@ -2,16 +2,19 @@
 
 ## Overview
 
-This system is a four-layer AI agent for processing insurance claims. Each layer has a single, clearly defined responsibility. Layers communicate only with the layer directly adjacent to them.
+This system is a five-layer AI agent for processing insurance claims. Each layer has a single, clearly defined responsibility and communicates only with the layer directly below it.
 
 ```
-Chatbot  (IO only)
-  └── ClaimAgent  (controls everything)
-        └── Claim / ClaimParser
-              └── DocReader
+Chatbot        (core/chatbot.py)      — IO only, no business logic
+  └── ClaimAgent  (core/agent.py)     — LangGraph state machine controller
+        └── ClaimParser (core/parser.py) — validation, status, reply handling
+              └── DocReader (core/doc_reader.py) — file extraction via VLM
+                    └── LLMAdapters (core/llm_adapters.py) — Gemini / Qwen clients
 ```
 
-**Entry point assumption:** Input files are assumed to have been uploaded to a local folder before processing begins.
+Shared utilities (YAML loading, schema loading) live in `core/utils.py`.
+
+**Entry point assumption:** Input files are assumed to have been uploaded to a local claim folder before processing begins.
 
 ```python
 chatbot = Chatbot()
@@ -25,11 +28,11 @@ agent.process_claim("claims/CLM-001/")
 
 ### 1. Chatbot
 
-**File:** `chatbot.py`
+**File:** `core/chatbot.py`
 
 **Responsibility:** Pure IO layer. Renders output and captures user input on demand. Contains no business logic and no decision-making. `ClaimAgent` owns the conversation flow and calls `Chatbot` when it needs to interact with the user.
 
-**Design note:** Implemented as CLI for this assignment. Swapping to Gradio or a REST API requires only replacing this class.
+**Design note:** Implemented as CLI for the current version. Swapping to Gradio or a REST API requires only replacing this class.
 
 #### ADT
 
@@ -43,146 +46,68 @@ class Chatbot:
 
 ### 2. ClaimAgent
 
-**File:** `claim_agent.py`
+**File:** `core/agent.py`
 
-**Responsibility:** Controls the entire workflow. Decides which tool to call, when to ask the user for input, and what to display. Reads workflow rules from `config/workflow.yaml` and message templates from `config/messages.yaml`. Does not read documents or validate fields directly.
+**Responsibility:** Controls the entire workflow via a LangGraph state machine. Decides which node to invoke next based on claim state. Reads workflow rules from `config/workflow.yaml` and message templates from `config/messages.yaml`. Does not read documents or validate fields directly.
 
-**Design note:** `ClaimAgent` holds a reference to `Chatbot` and calls it when user interaction is needed. This keeps `Chatbot` as a passive IO tool and `ClaimAgent` as the single decision-maker.
+**Framework:** LangGraph (`StateGraph` with conditional edges)
 
-**Framework:** LangGraph
+**LangGraph graph** (`ClaimAgent._build_graph`):
+- Entry → `parse_documents` → `cross_validate`
+- Conditional after `cross_validate`: if status is `incomplete` or `pending` → `generate_message` → `accept_reply`
+- Conditional after `accept_reply`: if reply was not skipped and under `max_reply_rounds` → `cross_validate` again; else END
+- Routing is deterministic/conditional, not LLM-driven (compliance requirement — insurance claim processing has well-defined states where unpredictable LLM-driven tool selection would be a liability)
 
-**Tool dispatch:** Tools are not called in a hardcoded sequence. `ClaimAgent` uses LangGraph conditional edges to decide at runtime which tool to invoke next based on the current `ClaimState`. The trigger table below describes the conditions, not a fixed pipeline.
-
-**Why deterministic routing is justified here:** Insurance claim processing has well-defined states and transition rules. Fully dynamic LLM-driven tool selection would introduce unpredictability in a compliance-sensitive domain. The right tradeoff is conditional dispatch (LangGraph decides based on state) rather than either a hardcoded sequence or unconstrained LLM autonomy.
-
-**Hybrid model strategy:** Task-to-model assignment is defined in
-`config/settings.yaml` under `task_model_map`. `ClaimAgent` reads this
-map at initialisation and instantiates the appropriate `BaseLLMClient`
-for each role. Task roles are:
-
-  vision  — document parsing (PDFReader, ImageReader)
-  logic   — cross-validation, status determination, message generation
-  reply   — customer reply parsing (TextReader)
-
-Routing is done at call time: each internal method receives the client
-for its role, not a model_id string. This keeps task routing as a
-configuration concern, not a code concern.
-
-**Async reply support via LangGraph checkpointing:** `ClaimAgent.accept_reply()`
-is designed as a resumable entry point. `ClaimState` is fully serialisable
-(all fields are Pydantic models), allowing LangGraph's checkpointer to
-suspend execution after `generate_customer_message` and resume when a
-reply arrives — without blocking a thread. The CLI implementation uses
-synchronous `input()` for testing, but the state machine itself imposes
-no blocking requirement. Replacing the CLI with a webhook or message
-queue requires no changes to `ClaimAgent` logic.
+**State:** `ClaimState` is a `TypedDict` holding `claim`, `folder_path`, `field_schemas`, `llm_client`, `chatbot`, `workflow_config`, `message_config`, `parser`, and `reply_skipped`. It is fully serialisable to support future LangGraph checkpointing.
 
 #### ADT
 
 ```python
 class ClaimAgent:
     chatbot: Chatbot
-    llm_clients: dict[str, BaseLLMClient]
-    # keyed by task role, e.g.:
-    # { "vision": GeminiAdapter, "logic": QwenAdapter }
-    # instantiated from config/settings.yaml task_model_map at __init__ time
-    workflow_config: dict       # loaded from config/workflow.yaml
-    message_config: dict        # loaded from config/messages.yaml
+    llm_client: BaseLLMClient        # single client, model selected from config/settings.yaml
+    workflow_config: dict            # loaded from config/workflow.yaml
+    message_config: dict             # loaded from config/messages.yaml
+    field_schemas: list[FieldSchema] # loaded from config/field_schema.json
 
     def __init__(self, chatbot: Chatbot) -> None
     def process_claim(self, folder_path: str, uploaded_at: str | None = None) -> Claim
     # uploaded_at: ISO 8601 string; falls back to folder mtime if None
-    def accept_reply(self, claim: Claim) -> Claim
-    # calls chatbot.ask() to get reply_text
-    # then calls ClaimParser.handle_reply(claim, reply_text, self.llm_client)
     def prioritize_claims(self, claims: list[Claim]) -> list[PriorityRecord]
 ```
 
-**Tools dispatched:**
+**Graph nodes:**
 
-| Tool | Trigger condition |
+| Node | Trigger condition |
 |------|------------------|
-| `parse_documents` | on_start |
-| `cross_validate` | after all documents parsed |
-| `generate_customer_message` | status is `incomplete` or `pending` |
-| `accept_reply` | on inbound customer message |
+| `parse_documents` | entry point |
+| `cross_validate` | after all documents parsed; also after each accepted reply |
+| `generate_message` | status is `incomplete` or `pending` |
+| `accept_reply` | after every outbound customer message |
 
-**Claim prioritization logic:**
+**Customer message format:** `_build_customer_message` assembles a single unified email from body fragments defined in `config/messages.yaml`. One greeting, numbered issue list, one sign-off — regardless of how many issues are present. Warning-severity inconsistencies get a non-alarming fragment; blocking ones ask the customer to clarify.
+
+**Claim prioritisation logic:**
 
 ```
 Primary sort: status
-  complete    → highest priority (ready to finalise immediately)
-  incomplete  → second (notify user as early as possible)
-  pending     → last (enters human review queue)
+  complete             → highest priority (ready to finalise immediately)
+  incomplete (express) → second (≤1 unresolved issue, no missing docs)
+  incomplete           → third (notify user as early as possible)
+  pending              → last (enters human review queue)
 
 Secondary sort: uploaded_at (oldest first within same status group)
-
-Express flag: applies to incomplete claims only
-  condition:  unresolved validation_issues < 2
-  effect:     flagged claim moves to front of the incomplete group
-  rationale:  complete claims need no special routing;
-              pending claims cannot bypass human review regardless
 ```
 
-**Priority reason templates** are defined in `config/messages.yaml` under `priority_reason`. They are not generated ad hoc.
+Priority reason strings are defined in `config/messages.yaml` under `priority_reason` — not generated ad hoc.
 
 ---
 
-### 3. Claim
+### 3. ClaimParser
 
-**File:** `claim.py`
-
-**Responsibility:** Pure data container for a single claim. Holds all state, document records, conversation history, and extracted field values. Contains no processing logic.
-
-**Design note:** `Claim` can be imported independently by any future system without pulling in processing logic.
-
-#### ADT
-
-```python
-class Claim(BaseModel):
-    claim_id: str
-    status: Literal["complete", "incomplete", "pending"]
-    reply_count: int
-    uploaded_at: str                # ISO 8601; from argument or folder mtime
-    doc_table: list[DocRecord]
-    extracted_fields: dict[str, ExtractedField]
-    validation_issues: list[ValidationIssue]
-    conversation_log: list[ConversationRound]
-```
-
-**Status semantics:**
-
-| Status | Meaning | Who acts |
-|--------|---------|---------|
-| `complete` | All required docs present, all fields valid, no unresolved issues | Nobody — ready to finalise |
-| `incomplete` | User-side problem, system can tell user exactly what to do | User |
-| `pending` | Requires human intervention, user cannot resolve alone | Company staff |
-
-**Why `pending` over `needs_review`:** `needs_review` describes a state. `pending` describes ownership — it makes explicit that the ball is in the company's court. This maps more cleanly to real workflow routing.
-
-**Status aggregation logic:**
-
-```
-any doc_status == "missing"                          → incomplete
-any doc_status == "duplicate" (same_filename)        → incomplete
-any doc_status == "duplicate" (same_content)         → pending
-any field inconsistency (unresolved)                 → incomplete
-user confirms docs correct, inconsistency remains    → pending
-any parse_status == "parse_failed"                   → pending
-any doc_type == "unknown"                            → pending
-any low_confidence field (unresolved)                → pending
-all required docs present + all fields valid         → complete
-```
-
----
-
-### 4. ClaimParser
-
-**File:** `claim_parser.py`
+**File:** `core/parser.py`
 
 **Responsibility:** All processing logic that operates on a `Claim`. Each method has a single responsibility. `handle_reply` is the orchestrator for reply processing — it calls the smaller methods rather than implementing everything inline.
-
-**Design note:** Separating `ClaimParser` from `Claim` means processing strategy can be swapped without changing the data structure.
 
 #### ADT
 
@@ -192,49 +117,61 @@ class ClaimParser:
     def check_required_docs(
         self, claim: Claim
     ) -> list[str]
-    # returns list of missing required doc types
+    # returns list of required doc types that are absent
 
     def cross_validate(
         self, claim: Claim
     ) -> list[ValidationIssue]
-    # compares unified_value of same field across documents
+    # compares unified_value of each field across all document sources
     # only processes source_trust == "document"
     # never modifies confidence values
+    # assigns severity: "blocking" or "warning" (see below)
 
     def determine_status(
         self, claim: Claim
     ) -> Literal["complete", "incomplete", "pending"]
     # evaluates doc_table and validation_issues
+    # only "blocking" inconsistencies affect routing
 
-    def parse_reply(
+    def extract_reply_fields(
         self, reply_text: str,
-        target_fields: list[FieldSchema],
+        schemas: list[FieldSchema],
         client: BaseLLMClient
     ) -> list[ExtractedField]
-    # calls TextReader with XML isolation
-    # source_trust hard-set to "user_input", confidence hard-capped at low
+    # calls TextReader; source_trust hard-set to "user_input", confidence hard-capped at low
 
     def compare_fields(
         self, claim: Claim,
         new_fields: list[ExtractedField]
     ) -> dict[str, Literal["consistent", "inconsistent"]]
     # compares new_fields against claim.extracted_fields (unified_value only)
-    # user_input fields never resolve existing ValidationIssues
 
-    def log_reply(
+    def record_reply(
         self, claim: Claim,
         message: str,
         compare_results: dict
     ) -> None
-    # appends ConversationRound to claim.conversation_log
+    # appends ConversationRound to claim.conversation_log; increments reply_count
 
     def handle_reply(
         self, claim: Claim,
         reply_text: str,
-        client: BaseLLMClient
+        client: BaseLLMClient,
+        schemas: list[FieldSchema]
     ) -> Claim
-    # orchestrator: parse_reply → compare_fields → log_reply → determine_status
+    # orchestrator: extract_reply_fields → compare_fields → record_reply → determine_status
 ```
+
+**Confidence-aware inconsistency severity:**
+
+`cross_validate` assigns `severity` to each `ValidationIssue`:
+
+| Condition | Severity |
+|-----------|---------|
+| Two or more medium/high confidence sources disagree | `blocking` |
+| Only low-confidence sources conflict, or a single low-confidence source disagrees with a high-confidence one | `warning` |
+
+`blocking` inconsistencies affect claim routing. `warning` inconsistencies are logged for staff review but do not push the claim to `incomplete` or `pending`.
 
 **Confidence score rules:**
 
@@ -258,32 +195,34 @@ TextReader (XML-isolated, source_trust = "user_input")
     │  confidence hard-capped at low
     ▼
 compare_fields (unified_value only)
-    ├── consistent   → log_reply only
+    ├── consistent   → record_reply only
     └── inconsistent → ValidationIssue added, status → pending
 ```
 
+Customer replies **cannot resolve inconsistencies** — even a matching reply does not eliminate a conflict between original documents. This is a deliberate trust model decision.
+
 ---
 
-### 5. DocReader
+### 4. DocReader
 
-**File:** `doc_reader.py`
+**File:** `core/doc_reader.py`
 
-**Responsibility:** Reads a single file and returns extracted field values. Accepts `target_fields` so the VLM prompt is focused. Handles all file-type-specific preprocessing internally. Stateless — each call is fully independent.
+**Responsibility:** Reads a single file and returns a `DocRecord` containing extracted field values. Accepts `schemas` so the VLM prompt is focused on the fields that matter. Handles all file-type-specific preprocessing internally. Stateless — each call is fully independent.
 
-**Retry logic** is centralised in `BaseDocReader.call_vlm()`. All subclasses call this method rather than the VLM API directly. This ensures retry behaviour is consistent and not duplicated across `PDFReader`, `ImageReader`, and `TextReader`.
+**Dispatch:** `get_doc_reader(file_path)` selects the appropriate reader by file extension.
 
-**Known limitation — scanned PDFs:** Routing on file extension alone means a PDF with no text layer will be sent to `PDFReader` and may produce poor extractions. `PDFReader` mitigates this by checking extracted text volume after initial parsing. If the result falls below `pdf_text_threshold` (defined in `config/settings.yaml`), it falls back to `ImageReader` and logs the fallback in `DocRecord.status_reason`.
+**PDF fallback:** `PDFReader` checks extracted text volume after initial parsing. If the result falls below `pdf_text_threshold` (in `config/settings.yaml`), it falls back to `ImageReader` and logs the fallback in `DocRecord.status_reason`.
 
 #### ADT
 
 ```python
-class BaseDocReader:
+class BaseDocReader(ABC):
     def read(
         self,
         file_path: str,
-        target_fields: list[FieldSchema],
-        client: BaseLLMClient       # injected from ClaimAgent.llm_clients
-    ) -> list[ExtractedField]
+        schemas: list[FieldSchema],
+        client: BaseLLMClient
+    ) -> DocRecord
 
     def call_vlm(
         self,
@@ -291,70 +230,67 @@ class BaseDocReader:
         files: list[str] | None,
         client: BaseLLMClient
     ) -> dict
-    # centralised VLM call with exponential backoff (3 attempts)
-    # raises ParseFailedError on final failure
+    # delegates to client.generate(); raises ParseFailedError on failure
 
-class PDFReader(BaseDocReader):
-    def read(self, file_path, target_fields, client: BaseLLMClient) -> list[ExtractedField]
-    # checks extracted text volume against config pdf_text_threshold
-    # falls back to ImageReader if below threshold
+class PDFReader(BaseDocReader): ...
+    # extracts text via pdfplumber; falls back to ImageReader if text is sparse
 
-class ImageReader(BaseDocReader):
-    def preprocess(self, file_path: str) -> str     # deskew, returns processed path
-    def read(self, file_path, target_fields, client: BaseLLMClient) -> list[ExtractedField]
+class ImageReader(BaseDocReader): ...
+    # preprocesses (deskew) before sending to VLM
+    # caps all extracted field confidence at "medium"
 
-class TextReader(BaseDocReader):
+class TextReader(BaseDocReader): ...
     # wraps content in XML isolation tags before sending to VLM
-    def read(self, file_path, target_fields, client: BaseLLMClient) -> list[ExtractedField]
 
-class DocReaderFactory:
-    @staticmethod
-    def get_reader(file_path: str) -> BaseDocReader
-    # .pdf  → PDFReader (with ImageReader fallback)
-    # .png / .jpg → ImageReader
-    # .txt  → TextReader
+def get_doc_reader(file_path: str) -> BaseDocReader:
+    # .pdf        → PDFReader (with ImageReader fallback)
+    # .png / .jpg / .jpeg → ImageReader
+    # .txt        → TextReader
+    # other       → raises UnsupportedFileTypeError
 ```
 
 ---
 
-### 6. LLM Adapters
+### 5. LLM Adapters
 
-**File:** `llm_adapters.py`
+**File:** `core/llm_adapters.py`
 
-**Responsibility:** Abstracts all VLM API calls behind a common interface.
-Each adapter handles SDK initialization, prompt formatting, JSON schema
-enforcement, and response parsing for its specific provider. No other
-layer calls a VLM SDK directly.
+**Responsibility:** Abstracts all VLM API calls behind a common interface. Each adapter handles SDK initialisation, prompt formatting, JSON schema enforcement, and response parsing for its specific provider. No other layer calls a VLM SDK directly.
+
+**Retry logic:** `_with_retry` wraps every `generate` call in `GeminiAdapter` and `QwenAdapter`. It catches transient errors (rate-limit 429, server errors 5xx, `ResourceExhausted`, `ServiceUnavailable`) and retries with exponential backoff using parameters from `config/settings.yaml`. After exhausting all attempts, it raises `ParseFailedError`. `QwenLocalAdapter` (local, no network) is excluded from retry.
 
 #### ADT
 
 ```python
-class BaseLLMClient:
+class BaseLLMClient(ABC):
     def generate(
         self,
         prompt: str,
         response_schema: type[BaseModel],
         files: list[str] | None = None
     ) -> dict
-    # raises ParseFailedError on malformed response after retries
+    # raises ParseFailedError on malformed response or after retries exhausted
 
 class GeminiAdapter(BaseLLMClient):
     # enforces structured output via response_mime_type + response_schema
-    # handles Pydantic → Gemini-compatible schema conversion
-    # note: not all Pydantic field types are supported; adapter holds escape hatch
-    def generate(self, prompt, response_schema, files=None) -> dict
+    # flattens Pydantic schema to remove $ref / unsupported keywords before calling Gemini
+    # retries on transient API errors via _with_retry
 
 class QwenAdapter(BaseLLMClient):
     # enforces structured output via OpenAI-compatible response_format
-    # handles Pydantic → JSON schema conversion
-    def generate(self, prompt, response_schema, files=None) -> dict
+    # retries on transient API errors via _with_retry
+
+class QwenLocalAdapter(BaseLLMClient):
+    # runs Qwen VL models locally via Hugging Face transformers
+    # no retry (local inference, no network)
 
 class LLMClientFactory:
     @staticmethod
-    def get_client(model_id: str) -> BaseLLMClient
-    # "gemini" → GeminiAdapter
-    # "qwen"   → QwenAdapter
-    # unsupported model_id → raises ValueError
+    def get_client(model_id: str) -> BaseLLMClient:
+    # "gemini"      → GeminiAdapter
+    # "qwen"        → QwenAdapter
+    # "qwen_local"  → QwenLocalAdapter
+    # unsupported   → raises UnsupportedModelError
 ```
 
 ---
@@ -402,7 +338,7 @@ class DocRecord(BaseModel):
     # same_filename → incomplete; same_content → pending (data integrity concern)
     status_reason: str | None
     content_hash: str | None        # SHA-256, used for duplicate detection
-    raw_text: str | None            # cached to avoid re-calling VLM
+    raw_text: str | None
     fields: list[ExtractedField]
 ```
 
@@ -410,6 +346,7 @@ class DocRecord(BaseModel):
 ```python
 class ValidationIssue(BaseModel):
     issue_type: Literal["inconsistency", "missing", "invalid", "low_confidence"]
+    severity: Literal["blocking", "warning"]  # see cross_validate severity rules
     field_name: str | None
     description: str
     sources: list[str]
@@ -437,7 +374,7 @@ class PriorityRecord(BaseModel):
     claim_id: str
     status: Literal["complete", "incomplete", "pending"]
     uploaded_at: str
-    express: bool                   # True if incomplete and unresolved issues < 2
+    express: bool                   # True if incomplete and unresolved issues < 2 and no missing docs
     priority_rank: int
     reason: str                     # populated from config/messages.yaml priority_reason
 ```
@@ -457,20 +394,48 @@ A claim cannot reach `complete` status if any required document is missing or ha
 
 ---
 
-## Error Handling Strategy
+## Status Aggregation Logic
+
+`ClaimParser.determine_status` evaluates in this priority order:
+
+```
+1. any doc_status == "missing"                                → incomplete
+2. any doc_status == "duplicate" (same_filename)              → incomplete
+3. any doc_status == "duplicate" (same_content)               → pending
+4. any unresolved blocking inconsistency, reply_count == 0    → incomplete
+5. any unresolved blocking inconsistency, reply_count > 0     → pending
+   (warning-severity inconsistencies do not affect routing)
+6. any parse_status == "parse_failed"                         → pending
+7. any doc_type == "unknown"                                  → pending
+8. any unresolved low_confidence required field               → pending
+9. all required docs present + all required fields valid      → complete
+10. fallback                                                  → incomplete
+```
+
+**Status semantics:**
+
+| Status | Meaning | Who acts |
+|--------|---------|---------|
+| `complete` | All required docs present, all fields valid, no unresolved blocking issues | Nobody — ready to finalise |
+| `incomplete` | User-side problem; system can tell the user exactly what to fix | Customer |
+| `pending` | Requires human intervention; customer cannot resolve alone | Company staff |
+
+**Why `pending` over `needs_review`:** `pending` describes ownership — the ball is in the company's court. `needs_review` only describes state. The distinction maps directly to workflow routing.
+
+---
+
+## Error Handling
 
 All unrecoverable errors result in `pending` status rather than silent failure. Every error is recorded in `DocRecord.status_reason` or `ValidationIssue.description` for human review.
 
-Retry logic lives in `BaseDocReader.call_vlm()` and is not duplicated in subclasses.
-
 | Error | Handling |
 |-------|---------|
-| VLM returns malformed JSON | Retry once via `call_vlm()`. If still malformed → `parse_status = "parse_failed"`, status → `pending` |
-| File corrupted or unreadable | `parse_status = "parse_failed"`, status → `pending`, log in `status_reason` |
-| API timeout | Exponential backoff, 3 attempts via `call_vlm()`. On final failure → `parse_status = "parse_failed"`, status → `pending` |
-| PDF with no text layer | `PDFReader` detects low text volume (below `pdf_text_threshold` in `config/settings.yaml`) and falls back to `ImageReader` |
-| Unknown doc type | `doc_type = "unknown"`, status → `pending`, no field extraction attempted |
-| `model_id` not supported | `ValueError` raised at `LLMClientFactory.get_client()`, before any processing begins |
+| Transient API error (rate-limit, 5xx) | Exponential backoff, up to `retry.max_attempts` attempts (`llm_adapters._with_retry`). On final failure → `ParseFailedError` → `parse_status = "parse_failed"`, claim → `pending` |
+| VLM returns malformed JSON | `ParseFailedError` raised immediately (not retried) → `parse_status = "parse_failed"`, claim → `pending` |
+| File corrupted or unreadable | `parse_status = "parse_failed"`, claim → `pending`, logged in `status_reason` |
+| PDF with no text layer | `PDFReader` detects low text volume (below `pdf_text_threshold`) and falls back to `ImageReader` |
+| Unknown doc type | `doc_type = "unknown"`, claim → `pending`, no field extraction attempted |
+| Unsupported `model_id` | `UnsupportedModelError` raised at `LLMClientFactory.get_client()`, before any processing begins |
 
 ---
 
@@ -481,36 +446,38 @@ Folder path
     │
     ▼
 ClaimAgent
-    │  loads workflow.yaml + messages.yaml
+    │  loads workflow.yaml + messages.yaml + field_schema.json
     │  instantiates llm_client from model_id (config/settings.yaml)
     │  calls chatbot.ask() / chatbot.display() as needed
     │
-    ├── DocReaderFactory → PDFReader / ImageReader / TextReader
-    │       └── BaseDocReader.call_vlm(client)   ← ClaimAgent.llm_client
-    │               └── list[ExtractedField] → stored in DocRecord.fields
+    ├── node_parse_documents
+    │       get_doc_reader() → PDFReader / ImageReader / TextReader
+    │           └── BaseDocReader.read(schemas, llm_client)
+    │                   └── DocRecord (with fields) → stored in Claim.doc_table
+    │               merge extracted_fields into Claim.extracted_fields
+    │               insert missing-doc placeholder DocRecords
     │
-    ├── ClaimParser.cross_validate
-    │       └── list[ValidationIssue] → stored in Claim.validation_issues
-    │
-    ├── ClaimParser.determine_status
-    │       └── complete / incomplete / pending → stored in Claim.status
+    ├── node_cross_validate
+    │       ClaimParser.cross_validate → list[ValidationIssue] (blocking or warning)
+    │       ClaimParser.determine_status → complete / incomplete / pending
     │
     ├── [if incomplete or pending]
-    │       generate_customer_message (via messages.yaml template)
-    │       → chatbot.display()
+    │       node_generate_message
+    │           _build_customer_message → single unified email (from messages.yaml fragments)
+    │           → chatbot.display() + ConversationRound appended
     │
-    ├── [if customer replies]
-    │       ClaimAgent.accept_reply
-    │           → chatbot.ask() → reply_text
-    │           → ClaimParser.handle_reply(claim, reply_text, client)   ← ClaimAgent.llm_client
-    │               ├── parse_reply (TextReader, source_trust = "user_input")
+    ├── [waiting for customer reply]
+    │       node_accept_reply
+    │           chatbot.ask() → reply_text
+    │           ClaimParser.handle_reply(claim, reply_text, llm_client, schemas)
+    │               ├── extract_reply_fields (TextReader, source_trust = "user_input")
     │               ├── compare_fields
-    │               ├── log_reply → conversation_log
+    │               ├── record_reply → conversation_log
     │               └── determine_status → updated Claim.status
+    │           → loop back to node_cross_validate if under max_reply_rounds
     │
-    └── [after all claims processed]
-            ClaimAgent.prioritize_claims
-                └── list[PriorityRecord]
+    └── [after processing]
+            ClaimAgent.prioritize_claims → list[PriorityRecord]
 ```
 
 ---
@@ -520,16 +487,15 @@ ClaimAgent
 ```
 claims/
 └── CLM-001/
-    ├── police_report.pdf         ← original input, never modified
-    ├── finance_agreement.png     ← original input, never modified
-    ├── settlement_breakdown.pdf  ← original input, never modified
-    ├── customer_reply.txt        ← original input, never modified (optional)
+    ├── police_report.pdf          ← original input, never modified
+    ├── finance_agreement.png      ← original input, never modified
+    ├── settlement_breakdown.pdf   ← original input, never modified
+    ├── customer_reply.txt         ← original input, never modified (optional)
     └── .cache/
-        └── claim_state.json      ← single source of truth; includes
-                                     conversation_log, doc_table, all fields
+        └── claim_state.json       ← full serialised Claim; single source of truth
 ```
 
-`conversation_log` is serialised as part of `claim_state.json`. There is no separate `conversation.json`. A human-readable export can be generated from `claim_state.json` on demand if needed for review, but `claim_state.json` is the only authoritative record.
+`conversation_log` is serialised as part of `claim_state.json`. There is no separate conversation file — a single file eliminates the risk of drift between two representations of the same state.
 
 ---
 
@@ -538,60 +504,52 @@ claims/
 | File | Purpose |
 |------|---------|
 | `config/field_schema.json` | Field definitions, validation rules, unify instructions |
-| `config/workflow.yaml` | Agent workflow rules and trigger conditions |
-| `config/messages.yaml` | Outbound message templates and priority reason strings |
-| `config/settings.yaml` | Runtime parameters including `pdf_text_threshold` and `task_model_map` (task-to-model assignment) |
+| `config/workflow.yaml` | `max_reply_rounds` and other routing parameters |
+| `config/messages.yaml` | `customer_email` wrapper template, `issue_fragments` body snippets, `priority_reason` strings |
+| `config/settings.yaml` | `model_id`, model parameters, `pdf_text_threshold`, `retry` block |
 
 ---
 
 ## Key Design Decisions
 
-**ClaimAgent controls Chatbot.** `ClaimAgent` owns the conversation flow and calls `chatbot.ask()` / `chatbot.display()` when needed. `Chatbot` is a passive IO tool with no decision-making responsibility.
-
-**Conditional dispatch, not hardcoded pipeline.** LangGraph conditional edges decide which tool to invoke based on `ClaimState`. Deterministic routing is justified in this domain — insurance claim processing has well-defined states and compliance requirements that make unpredictable LLM-driven tool selection inappropriate.
-
-**`pending` over `needs_review`.** `pending` describes ownership (company staff must act), not just state. This maps directly to workflow routing.
-
-**Duplicate routing is type-aware.** Same-filename duplicates route to `incomplete` (trivially resolvable by the user). Same-content duplicates with different filenames route to `pending` (potential data integrity issue requiring human review).
-
-**Express flag is scoped to incomplete claims only.** `complete` claims need no special routing. `pending` claims cannot bypass human review. Express is only meaningful for `incomplete` claims with fewer than 2 unresolved issues.
+**Conditional dispatch, not hardcoded pipeline.** LangGraph conditional edges decide which node to invoke based on `ClaimState`. Deterministic routing is justified in this domain — insurance claim processing has well-defined states and compliance requirements that make unpredictable LLM-driven tool selection inappropriate.
 
 **Confidence is immutable after extraction.** Assigned by `DocReader` once and never modified. Every value is traceable to its source document and extraction method.
 
-**Customer replies cannot resolve inconsistencies.** This is a deliberate trust model decision, not an oversight. Even if a customer's reply contains a value consistent with one document, the underlying inconsistency between original documents still exists and requires human judgment. Accepting a reply as resolution would silently dismiss a potentially significant data conflict.
+**Confidence-aware inconsistency routing.** Cross-validation assigns `blocking` severity only when two or more medium/high confidence sources disagree. Low-confidence conflicts are logged as `warning` and do not hold up the claim — the company is notified but processing continues.
 
-**Human input is never trusted.** Customer replies are parsed with `source_trust == "user_input"` and a hard confidence cap of `low`. Information from replies is recorded for audit but never used to resolve issues automatically.
+**Customer replies cannot resolve inconsistencies.** Even if a customer's reply matches one document, the underlying conflict between original documents still exists and requires human judgment. Accepting a reply as resolution would silently dismiss a potentially significant data conflict.
 
-**Workflow and messages are externalised.** `config/workflow.yaml` and `config/messages.yaml` control agent behaviour without requiring code changes. Priority reason strings follow the same pattern for consistency.
+**Human input is never trusted.** Customer replies are parsed with `source_trust = "user_input"` and a hard confidence cap of `low`. Reply data is recorded for audit but never used to auto-resolve issues.
 
-**Retry logic is centralised.** All VLM calls go through `BaseDocReader.call_vlm()`. Retry behaviour (exponential backoff, 3 attempts) is implemented once and inherited by all subclasses.
+**Single unified customer email.** All issues (missing docs, parse failures, inconsistencies) are collected and sent as one email per interaction cycle. Individual sections are body fragments in `config/messages.yaml`; the outer wrapper (greeting + sign-off) is a single template. This avoids sending multiple disjointed emails for the same claim in the same round.
 
-**LLM adapter layer isolates SDK dependencies.** No layer outside `llm_adapters.py` calls a VLM SDK directly. `BaseLLMClient` is the only interface the rest of the system depends on. Swapping providers or adding a new model requires only a new adapter class and updating `model_id` in `config/settings.yaml` — no changes to `DocReader`, `ClaimParser`, or `ClaimAgent`.
+**`pending` over `needs_review`.** `pending` describes ownership (company staff must act), not just state. This maps directly to workflow routing.
 
-**`ParsedDocument` removed.** Fields and raw text are stored directly in `DocRecord`, eliminating a redundant intermediate structure.
+**Duplicate routing is type-aware.** Same-filename duplicates → `incomplete` (trivially resolvable by the user). Same-content duplicates with different filenames → `pending` (potential data integrity concern requiring human review).
 
-**Single source of truth for claim state.** `claim_state.json` is the only persisted record. `conversation_log` is part of `Claim` and serialised within it. No separate `conversation.json` to avoid data drift between two files representing the same information.
+**Express flag is scoped to incomplete claims only.** `complete` claims need no special routing. `pending` claims cannot bypass human review. Express is only meaningful for `incomplete` claims with fewer than 2 unresolved issues and no missing documents.
 
-**`DocRecord.parse_status` uses `unprocessed`, not `pending`.** At the doc level, `unprocessed` means not yet parsed. This is semantically distinct from `Claim.status = "pending"`, which means company staff must act. Using the same word for different concepts across levels would cause confusion.
+**Retry is in the adapter layer, not DocReader.** Transient API failures (rate-limits, 5xx) are retried by `llm_adapters._with_retry` before they propagate. `DocReader` sees either a successful result or a `ParseFailedError` — it does not need to know about network-level retry logic.
+
+**LLM adapter layer isolates SDK dependencies.** No layer outside `llm_adapters.py` calls a VLM SDK directly. Swapping providers or adding a new model requires only a new adapter class and updating `model_id` in `config/settings.yaml`.
+
+**Single source of truth for claim state.** `claim_state.json` is the only persisted record. `conversation_log` is part of `Claim` and serialised within it.
+
+**`DocRecord.parse_status` uses `unprocessed`, not `pending`.** At the doc level, `unprocessed` means not yet parsed — semantically distinct from `Claim.status = "pending"`, which means company staff must act.
 
 ---
 
 ## Scale-up Considerations
 
-**Hybrid model routing:** The single `llm_client` on `ClaimAgent` can be extended to a role-keyed map (`dict[str, BaseLLMClient]`) when multi-model routing is needed — for example, routing vision-heavy tasks to Gemini and logic tasks to a different model. The `BaseLLMClient` interface already supports this; it requires only a `task_model_map` config entry and a small change to `ClaimAgent.__init__`. No other layer needs to change.
-
-**Parallel document processing:** `DocReader` is stateless. Multiple files can be processed concurrently with `asyncio` or a thread pool.
+**Parallel document processing:** `DocReader` is stateless. Multiple files in the same claim can be processed concurrently with `asyncio` or a thread pool.
 
 **Confidence-based model fallback:** Low-confidence extractions could retry with a larger model before escalating to human review. Straightforward to add inside `DocReader` by passing a different `BaseLLMClient` on retry — no changes required outside that layer.
 
-**Persistent state:** `claim_state.json` is structured to load into PostgreSQL or Redis without changes.
+**Multi-model routing:** The single `llm_client` on `ClaimAgent` can be extended to a role-keyed map (`dict[str, BaseLLMClient]`) when different tasks warrant different models (e.g., a vision model for PDFs and a text model for reply parsing). The `BaseLLMClient` interface already supports this; it requires a `task_model_map` config entry and a small change to `ClaimAgent.__init__`.
 
-**API layer:** `Chatbot` can be replaced with a FastAPI endpoint. `Claim` serialises to JSON via Pydantic.
+**Persistent state:** `claim_state.json` is structured to load directly into PostgreSQL or Redis without changes to the data model.
 
-**Multi-claim parallelism:** A queue-based dispatcher could run multiple `ClaimAgent` instances concurrently with minimal architectural changes.
+**API layer:** `Chatbot` can be replaced with a FastAPI endpoint. `Claim` already serialises to JSON via Pydantic.
 
-**Non-blocking reply handling:** Because `ClaimState` is fully
-serialisable, the system can be extended to suspend after sending a
-customer message and resume on an inbound webhook or queue event. The
-LangGraph checkpoint mechanism supports this without changes to
-`ClaimParser` or `Claim`.
+**Non-blocking reply handling:** `ClaimState` is fully serialisable. The system can be extended to suspend after sending a customer message and resume on an inbound webhook or queue event using LangGraph's checkpointer — no changes to `ClaimParser` or `Claim` required.

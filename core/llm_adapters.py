@@ -9,16 +9,65 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
 
-import yaml
 from pydantic import BaseModel
 
 from core.exceptions import ParseFailedError, UnsupportedModelError
+from core.utils import load_yaml
 
 
 def _load_settings() -> dict:
-    path = Path(__file__).parent.parent / "config" / "settings.yaml"
-    with open(path) as f:
-        return yaml.safe_load(f)
+    return load_yaml("config/settings.yaml")
+
+
+def _retry_config() -> tuple[int, float, float]:
+    """Return (max_attempts, base_delay, max_delay) from settings."""
+    cfg = _load_settings().get("retry", {})
+    return (
+        int(cfg.get("max_attempts", 3)),
+        float(cfg.get("base_delay_seconds", 2.0)),
+        float(cfg.get("max_delay_seconds", 30.0)),
+    )
+
+
+def _with_retry(fn, *args, **kwargs):
+    """Call fn with exponential backoff on transient errors.
+
+    Retries on: rate-limit (429), server errors (5xx), and provider-specific
+    ResourceExhausted / ServiceUnavailable exceptions. All other errors surface
+    immediately. After exhausting retries, raises ParseFailedError.
+    """
+    max_attempts, base_delay, max_delay = _retry_config()
+    delay = base_delay
+    last_exc: Exception | None = None
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return fn(*args, **kwargs)
+        except ParseFailedError:
+            raise
+        except Exception as exc:
+            err_str = str(exc).lower()
+            transient = (
+                "429" in err_str
+                or "quota" in err_str
+                or "resource_exhausted" in err_str
+                or "resourceexhausted" in err_str
+                or "service_unavailable" in err_str
+                or "serviceunavailable" in err_str
+                or "500" in err_str
+                or "503" in err_str
+                or "too many requests" in err_str
+            )
+            if not transient:
+                raise
+            last_exc = exc
+            if attempt < max_attempts:
+                time.sleep(min(delay, max_delay))
+                delay *= 2
+
+    raise ParseFailedError(
+        f"API call failed after {max_attempts} attempts: {last_exc}"
+    ) from last_exc
 
 
 def _prepare_gemini_schema(schema: dict) -> dict:
@@ -85,11 +134,11 @@ class GeminiAdapter(BaseLLMClient):
             uploaded = self._client.files.get(name=uploaded.name)
         return uploaded
 
-    def generate(
+    def _call_api(
         self,
         prompt: str,
         response_schema: type[BaseModel],
-        files: list[str] | None = None,
+        files: list[str] | None,
     ) -> dict:
         contents: list[Any] = []
         if files:
@@ -116,6 +165,14 @@ class GeminiAdapter(BaseLLMClient):
                 f"Gemini returned malformed JSON: {exc}"
             ) from exc
 
+    def generate(
+        self,
+        prompt: str,
+        response_schema: type[BaseModel],
+        files: list[str] | None = None,
+    ) -> dict:
+        return _with_retry(self._call_api, prompt, response_schema, files)
+
 
 class QwenAdapter(BaseLLMClient):
     def __init__(self, model: str, base_url: str, temperature: float = 0.0) -> None:
@@ -127,13 +184,12 @@ class QwenAdapter(BaseLLMClient):
         self._model = model
         self._temperature = temperature
 
-    def generate(
+    def _call_api(
         self,
         prompt: str,
         response_schema: type[BaseModel],
-        files: list[str] | None = None,
+        files: list[str] | None,
     ) -> dict:
-        # R1: base64 and mimetypes imported at module top
         messages: list[dict] = []
         if files:
             content_parts: list[dict] = []
@@ -169,6 +225,14 @@ class QwenAdapter(BaseLLMClient):
             raise ParseFailedError(
                 f"Qwen returned malformed JSON: {exc}"
             ) from exc
+
+    def generate(
+        self,
+        prompt: str,
+        response_schema: type[BaseModel],
+        files: list[str] | None = None,
+    ) -> dict:
+        return _with_retry(self._call_api, prompt, response_schema, files)
 
 
 class QwenLocalAdapter(BaseLLMClient):
