@@ -36,15 +36,20 @@ def check_field_consistency(field_name: str, values: dict[str, str]) -> dict:
     }
 
 
-def classify_document(file_name: str) -> dict:
-    """Infer the likely document type from the filename.
+def classify_document(file_name: str, actual_type: str | None = None) -> dict:
+    """Record document classification for the audit trail.
 
-    Content-based classification is a planned improvement — see README for details.
+    `actual_type` is the VLM-confirmed doc_type set after reading the file.
+    If omitted (pre-read call), only the filename heuristic is recorded.
     """
     lower = file_name.lower().replace("-", "_")
     inferred = next((v for k, v in _DOC_TYPE_KEYWORDS.items() if k in lower), "unknown")
+    result: dict = {"inferred_doc_type": inferred}
+    if actual_type is not None:
+        result["actual_doc_type"] = actual_type
+        result["overridden"] = actual_type != inferred
     return {
         "tool": "classify_document",
         "input": {"file_name": file_name},
-        "result": {"inferred_doc_type": inferred},
+        "result": result,
     }

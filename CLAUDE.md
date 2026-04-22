@@ -56,24 +56,35 @@ LLMAdapters    (core/llm_adapters.py)— Gemini and Qwen clients behind BaseLLMC
 
 **LangGraph graph** (`ClaimAgent._build_graph`):
 - Entry → `parse_documents` → `cross_validate`
-- Conditional: if status is `incomplete`/`pending` → `generate_message` → `accept_reply`
+- Conditional after `cross_validate`:
+  - `incomplete` + `reply_queue` non-empty → `accept_reply` (pre-loaded `.txt` reply)
+  - `incomplete` + `reply_queue` empty → `generate_message` → `accept_reply`
+  - `complete` or `needs_review` → END
 - Conditional after reply: if not skipped and under max rounds → `cross_validate` again; else END
 - Routing is deterministic/conditional, not LLM-driven (compliance requirement)
+
+**`.txt` files as auto-replies**: during `parse_documents`, any `.txt` file is read as a customer reply, added to `ClaimState.reply_queue`, and recorded as `doc_type="customer_reply"` in `doc_table`. `node_accept_reply` drains the queue before falling back to stdin.
 
 **DocReader dispatch** (`get_doc_reader`): selects `PDFReader`, `ImageReader`, or `TextReader` by file extension. `PDFReader` falls back to `ImageReader` when extracted text is below `pdf_text_threshold` (set in `config/settings.yaml`).
 
 **Field extraction flow**: Each `DocReader` calls the LLM with a structured prompt and expects a JSON response matching `_ExtractionResponse`. Fields are merged into `Claim.extracted_fields` — highest confidence wins per field name across all documents.
 
+**Customer messages**: `ClaimParser.build_customer_message_llm` composes the outbound email via LLM using guidelines + claim context from `config/messages.yaml`. Context includes `conversation_summary` (rolling LLM-maintained summary), best-guess field values, and document status. Falls back to template-based `build_customer_message` on failure.
+
+**Conversation summary**: `Claim.conversation_summary` is updated by `ClaimParser.update_conversation_summary` after each accepted reply. Tracks confirmed/corrected/pending items so the LLM doesn't re-ask for info already provided.
+
 **Status determination** (`ClaimParser.determine_status`) priority order:
 1. Missing required doc → `incomplete`
 2. Same-filename duplicate → `incomplete`
-3. Same-content duplicate → `pending`
-4. Unresolved inconsistency before first reply → `incomplete`; after reply → `pending`
-5. Parse failed or unknown doc type → `pending`
-6. Low-confidence required field → `pending`
+3. Same-content duplicate → `needs_review`
+4. Unresolved blocking inconsistency → `needs_review`
+5. Parse failed or unknown doc type → `needs_review`
+6. Low-confidence required field → `needs_review`
 7. All required docs complete + all required fields valid → `complete`
 
 **Customer replies**: always assigned `source_trust="user_input"` and `confidence="low"`. Replies cannot resolve inconsistencies — they can only add new comparison data to the conversation log.
+
+**Cache behavior**: `complete` and `needs_review` are loaded from cache without re-processing. `incomplete` claims re-process on every run (picks up new `.txt` reply files). Use `--no-cache` to force full re-run.
 
 **Claim state** is persisted to `<claim_folder>/.cache/claim_state.json` after each run.
 
@@ -83,9 +94,9 @@ All config is in `config/` — no magic constants in code:
 
 | File | Purpose |
 |------|---------|
-| `settings.yaml` | Active `model_id` (`gemini`\|`qwen`), model params, `pdf_text_threshold` |
+| `settings.yaml` | Active `model_id` (`gemini`\|`qwen`\|`qwen_local`), model params, `pdf_text_threshold` |
 | `field_schema.json` | Required/optional fields, data types, validation rules, unify instructions |
-| `messages.yaml` | Customer message templates and priority reason strings |
+| `messages.yaml` | LLM guidelines for customer messages and conversation summaries; template fallback; priority reason strings |
 | `workflow.yaml` | `max_reply_rounds` and other routing parameters |
 
 To switch models, change `model_id` in `config/settings.yaml`. `QWEN_API_KEY` and `QWEN_BASE_URL` env vars override the yaml values for Qwen.
@@ -93,6 +104,6 @@ To switch models, change `model_id` in `config/settings.yaml`. `QWEN_API_KEY` an
 ## Key Design Decisions
 
 - **Confidence is immutable**: set at extraction time, never changed. Every value is traceable to its source document.
-- **Duplicate routing is type-aware**: same filename → `incomplete` (user can fix); same content, different filename → `pending` (data integrity, requires human review).
-- **`pending` means ownership**: company staff must act, not just "something is wrong."
-- **`messages` attribute on `ClaimState`** uses LangGraph's `add_messages` reducer but is not actively used for routing — it exists for future streaming support.
+- **Duplicate routing is type-aware**: same filename → `incomplete` (user can fix); same content, different filename → `needs_review` (data integrity, requires human review).
+- **`needs_review` means staff ownership**: company staff must act. The agent never sends customer messages for `needs_review` claims.
+- **Confirmation-style messages**: for field inconsistencies, the LLM is given our best-guess value (`extracted_fields.unified_value`) and asks the customer to confirm or correct it — not an open "which is right?" question.

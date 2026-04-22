@@ -1,0 +1,812 @@
+======================================================================
+USER
+======================================================================
+you are a senior SWE, please review the whole repo and find all potential bugs, places that are not consistent, or anything that can be simplified
+
+----------------------------------------------------------------------
+ASSISTANT
+----------------------------------------------------------------------
+[Agent]
+
+----------------------------------------------------------------------
+ASSISTANT
+----------------------------------------------------------------------
+Let me verify the most critical findings before reporting them.
+
+----------------------------------------------------------------------
+ASSISTANT
+----------------------------------------------------------------------
+[Read: /home/imrui/Jaseci-Lab-AI-Engineer-take-home/core/agent.py]
+
+----------------------------------------------------------------------
+ASSISTANT
+----------------------------------------------------------------------
+[Read: /home/imrui/Jaseci-Lab-AI-Engineer-take-home/core/doc_reader.py]
+
+----------------------------------------------------------------------
+ASSISTANT
+----------------------------------------------------------------------
+[Read: /home/imrui/Jaseci-Lab-AI-Engineer-take-home/core/parser.py]
+
+----------------------------------------------------------------------
+ASSISTANT
+----------------------------------------------------------------------
+[Read: /home/imrui/Jaseci-Lab-AI-Engineer-take-home/core/agent.py]
+
+----------------------------------------------------------------------
+ASSISTANT
+----------------------------------------------------------------------
+[Read: /home/imrui/Jaseci-Lab-AI-Engineer-take-home/core/parser.py]
+
+----------------------------------------------------------------------
+ASSISTANT
+----------------------------------------------------------------------
+[Read: /home/imrui/Jaseci-Lab-AI-Engineer-take-home/core/llm_adapters.py]
+
+----------------------------------------------------------------------
+ASSISTANT
+----------------------------------------------------------------------
+The critical findings are confirmed. Here's the full review:
+
+---
+
+## Code Review
+
+### High Severity (bugs with wrong runtime behavior)
+
+**1. Deskew angle correction is backwards — `core/doc_reader.py:221-224`**
+
+```python
+angle = cv2.minAreaRect(coords)[-1]
+# comment says [-90, 0) but OpenCV ≥ 4.5 returns [0, 90)
+if angle < -45:          # this branch is never taken
+    angle = 90 + angle   # angle is never negative
+```
+
+On OpenCV ≥ 4.5, `minAreaRect` returns angles in `[0, 90)`. The `angle < -45` branch never fires. A page with a large tilt (e.g., angle=85) is then rotated by 85°, flipping it sideways. Fix:
+```python
+if angle > 45:
+    angle = angle - 90
+```
+
+**2. `existing.unified_value` can be `None`, crashing Pydantic — `core/parser.py:282-283`**
+
+```python
+"document": existing.unified_value if existing else "",
+```
+
+`existing` can be non-`None` but have `unified_value=None` (field found but not extracted). Pydantic's `dict[str, str]` on `ValidationIssue.values` will reject `None`. Fix: `existing.unified_value or ""`.
+
+**3. Parse-failed required docs are double-counted as missing — `core/agent.py:152`**
+
+When a required doc fails to parse, its `doc_type` becomes `"unknown"`. The present-types set doesn't contain the required type, so a `[missing] police_report` placeholder is appended *in addition* to the already-present parse-failed record. The `determine_status` priority then sees "missing" first and returns `incomplete`, when it should route to `pending` per the architecture spec.
+
+**4. `reply_skipped` mutated in-place on LangGraph state — `core/agent.py:262-266`**
+
+LangGraph state updates should be returned as a new partial dict, not mutated in place. Depending on the LangGraph version, in-place mutation can be silently dropped on merge. If `reply_skipped` never persists as `True`, the routing in `_route_after_reply` (line 277) always sends back to `cross_validate`, and since `reply_count` never increments (no `handle_reply` called), `reply_count < max_rounds` is permanently true → infinite loop.
+
+---
+
+### Medium Severity (semantic bugs, silent gaps)
+
+**5. Express flag marks all-missing-docs claims as express — `core/agent.py:386-388`**
+
+```python
+incomplete_express = [
+    c for c in incomplete_all
+    if sum(1 for vi in c.validation_issues if not vi.resolved) < 2
+]
+```
+
+Missing required documents do **not** create `ValidationIssue` records — they only add placeholder `DocRecord` entries. So a claim missing 3 required docs has zero unresolved `validation_issues` → qualifies as express (< 2 issues). A claim missing all documents is not a quick-to-resolve case.
+
+**6. User-input disagreements silently dropped when a prior inconsistency exists — `core/parser.py:261-267`**
+
+If an unresolved cross-document inconsistency already exists for field X, a customer reply that also disagrees is silently ignored. The existing issue stays but no user-input record is appended. The audit trail misses that the customer was at odds with both documents.
+
+**7. `invalid` and `low_confidence` issues never generate customer messages — `core/agent.py:209-211`**
+
+`_build_customer_message` only generates content for `inconsistency` issue types. `ValidationIssue.issue_type` can also be `"invalid"` or `"low_confidence"` (per `models.py`), but no message branch handles them. Customers never hear about invalid fields.
+
+**8. Backoff is linear, not exponential — `core/doc_reader.py:121`**
+
+Delays are `[0, 1, 2]` seconds (linear). The architecture doc and error-handling table advertise "exponential backoff." The label is misleading; total retry overhead is 3s instead of `1+2+4=7s`.
+
+**9. `temperature=None` passed to HF `.generate()` — `core/llm_adapters.py:250`**
+
+```python
+temperature=self._temperature if do_sample else None,
+```
+
+Passing `temperature=None` can trigger warnings and may default to 1.0 in some HF generation configs. When `do_sample=False`, omit the kwarg entirely.
+
+---
+
+### Inconsistencies (naming, docs vs. code, config mismatch)
+
+**10. Unused imports — `core/agent.py:4,7,11`**
+
+```python
+import os          # never used
+from typing import Annotated   # never used
+from langgraph.graph.message import add_messages  # never used
+```
+
+The `CLAUDE.md` mentions a `messages` attribute on `ClaimState` using `add_messages`, but no such field exists in the `ClaimState` TypedDict.
+
+**11. Dead `STATUS_ORDER` dict — `core/agent.py:371`**
+
+```python
+STATUS_ORDER = {"complete": 0, "incomplete": 1, "pending": 2}
+```
+
+Defined but never referenced. The sort is done manually with three list comprehensions below it.
+
+**12. Model ID defaults are mismatched across three places**
+- `config/settings.yaml`: `gemini-2.5-flash`  
+- `LLMClientFactory` fallback default (`core/llm_adapters.py:283`): `gemini-2.0-flash`  
+- Tests (`tests/test_llm_adapters.py:44`): `gemini-2.0-flash`
+
+**13. `workflow.yaml` `tools:` block is never read**
+
+`config/workflow.yaml` documents node trigger conditions under a `tools:` key, but no code reads it. The entire block is dead documentation.
+
+**14. Wrong pytest flag in docs — `CLAUDE.md:29` and `README.md:64`**
+
+```bash
+pytest tests/ -v -k "not integration"   # wrong: -k filters by test name
+```
+Should be `-m "not integration"` to filter by marker.
+
+**15. `TextReader` and `ImageReader` have different `doc_type` defaults on failure**
+
+- `PDFReader`/`ImageReader`: default `"unknown"` on parse failure
+- `TextReader` (`core/doc_reader.py:322`): defaults `"customer_reply"` if key absent
+
+**16. Duplicate `_sha256` helpers in two modules**
+
+`core/agent.py:40-42` defines `_sha256_of(path)` and `core/doc_reader.py:23-24` defines `_sha256(path)`. Same logic, different names.
+
+**17. CLAUDE.md architecture lists `qwen_local` as unsupported**
+
+`CLAUDE.md:82` says the supported `model_id` values are `gemini|qwen`, but `LLMClientFactory` also supports `qwen_local`.
+
+---
+
+### Simplification Opportunities
+
+**18. `NamedTemporaryFile` leaks in two places**
+
+- `core/parser.py:167-173`: temp file for reply text never deleted
+- `core/doc_reader.py:234-237`: deskewed image temp file handle never closed or deleted
+
+Both accumulate under `/tmp` on long-running processes. `TextReader` could accept raw text directly, eliminating the tempfile entirely for parse_reply.
+
+**19. `STATUS_ORDER` dict is dead code — remove it** (same as #11)
+
+**20. `compare_fields` has two near-identical early-exit paths — `core/parser.py:187-210`**
+
+```python
+if existing is None or existing.unified_value is None:
+    ...continue
+if field.unified_value is None:
+    ...continue
+```
+
+Collapse into one condition.
+
+**21. `determine_status` iterates `validation_issues` three times — `core/parser.py:106-136`**
+
+Three separate filtered list comprehensions over the same list. One pass with categorization is cleaner.
+
+**22. `prioritize_claims` sorts three times — `core/agent.py:373-393`**
+
+Three separate sorted list comprehensions. A single sort with a tuple key `(status_order, uploaded_at)` suffices.
+
+**23. `LLMClientFactory` uses if/elif — could be dict-based dispatch — `core/llm_adapters.py:276-302`**
+
+**24. `PDFReader` recomputes `content_hash` on fallback to `ImageReader` — `core/doc_reader.py:157-188`**
+
+The hash is computed once in `PDFReader.read` and again inside `ImageReader.read` for the same path.
+
+---
+
+### Summary by file
+
+| File | High | Medium | Low |
+|---|---|---|---|
+| `core/doc_reader.py` | deskew bug, tempfile leak | linear backoff | default mismatch, duplicate sha256 |
+| `core/agent.py` | double-count missing docs, state mutation | express flag, no-message issues | dead STATUS_ORDER, unused imports |
+| `core/parser.py` | Pydantic crash on None | silent dropped user-input | tempfile leak, repeated iterations |
+| `core/llm_adapters.py` | — | `temperature=None` | dict dispatch simplification |
+| `CLAUDE.md`/`README.md` | — | — | wrong `-k` flag, missing `qwen_local` |
+
+======================================================================
+USER
+======================================================================
+you are a senior SWE, please review the whole repo and find all potential bugs, places that are not consistent, or anything that can be simplified
+
+----------------------------------------------------------------------
+ASSISTANT
+----------------------------------------------------------------------
+Let me explore the current repo state since CLAUDE.md has changed significantly.
+
+----------------------------------------------------------------------
+ASSISTANT
+----------------------------------------------------------------------
+[Bash: find /home/imrui/Jaseci-Lab-AI-Engineer-take-home -type f | sort | grep -v __pyc]
+
+----------------------------------------------------------------------
+ASSISTANT
+----------------------------------------------------------------------
+[Read: /home/imrui/Jaseci-Lab-AI-Engineer-take-home/core/agent.py]
+
+----------------------------------------------------------------------
+ASSISTANT
+----------------------------------------------------------------------
+[Read: /home/imrui/Jaseci-Lab-AI-Engineer-take-home/core/parser.py]
+
+----------------------------------------------------------------------
+ASSISTANT
+----------------------------------------------------------------------
+[Read: /home/imrui/Jaseci-Lab-AI-Engineer-take-home/core/doc_reader.py]
+
+----------------------------------------------------------------------
+ASSISTANT
+----------------------------------------------------------------------
+[Read: /home/imrui/Jaseci-Lab-AI-Engineer-take-home/core/llm_adapters.py]
+
+----------------------------------------------------------------------
+ASSISTANT
+----------------------------------------------------------------------
+[Read: /home/imrui/Jaseci-Lab-AI-Engineer-take-home/core/models.py]
+
+----------------------------------------------------------------------
+ASSISTANT
+----------------------------------------------------------------------
+[Read: /home/imrui/Jaseci-Lab-AI-Engineer-take-home/tests/auto_test_agent.py]
+
+----------------------------------------------------------------------
+ASSISTANT
+----------------------------------------------------------------------
+[Read: /home/imrui/Jaseci-Lab-AI-Engineer-take-home/tests/auto_test_parser.py]
+
+----------------------------------------------------------------------
+ASSISTANT
+----------------------------------------------------------------------
+[Read: /home/imrui/Jaseci-Lab-AI-Engineer-take-home/tests/auto_test_doc_reader.py]
+
+----------------------------------------------------------------------
+ASSISTANT
+----------------------------------------------------------------------
+[Read: /home/imrui/Jaseci-Lab-AI-Engineer-take-home/tests/auto_test_llm_adapters.py]
+
+----------------------------------------------------------------------
+ASSISTANT
+----------------------------------------------------------------------
+[Read: /home/imrui/Jaseci-Lab-AI-Engineer-take-home/tests/auto_test_models.py]
+
+----------------------------------------------------------------------
+ASSISTANT
+----------------------------------------------------------------------
+[Read: /home/imrui/Jaseci-Lab-AI-Engineer-take-home/tests/integration/auto_test_end_to_end.py]
+
+----------------------------------------------------------------------
+ASSISTANT
+----------------------------------------------------------------------
+[Read: /home/imrui/Jaseci-Lab-AI-Engineer-take-home/config/settings.yaml]
+
+----------------------------------------------------------------------
+ASSISTANT
+----------------------------------------------------------------------
+[Read: /home/imrui/Jaseci-Lab-AI-Engineer-take-home/config/messages.yaml]
+
+----------------------------------------------------------------------
+ASSISTANT
+----------------------------------------------------------------------
+[Read: /home/imrui/Jaseci-Lab-AI-Engineer-take-home/config/workflow.yaml]
+
+----------------------------------------------------------------------
+ASSISTANT
+----------------------------------------------------------------------
+[Read: /home/imrui/Jaseci-Lab-AI-Engineer-take-home/main.py]
+
+----------------------------------------------------------------------
+ASSISTANT
+----------------------------------------------------------------------
+[Read: /home/imrui/Jaseci-Lab-AI-Engineer-take-home/pytest.ini]
+
+----------------------------------------------------------------------
+ASSISTANT
+----------------------------------------------------------------------
+[Read: /home/imrui/Jaseci-Lab-AI-Engineer-take-home/requirements/basic.txt]
+
+----------------------------------------------------------------------
+ASSISTANT
+----------------------------------------------------------------------
+[Read: /home/imrui/Jaseci-Lab-AI-Engineer-take-home/requirements/localmodel.txt]
+
+----------------------------------------------------------------------
+ASSISTANT
+----------------------------------------------------------------------
+Now I have a complete picture. Let me compile the full review with precise line numbers from the current code.
+
+---
+
+## Code Review
+
+### Bugs
+
+**1. Deskew angle is inverted — `core/doc_reader.py:221-224`**
+
+```python
+angle = cv2.minAreaRect(coords)[-1]
+# comment says [-90, 0) but OpenCV ≥ 4.5 returns [0, 90)
+if angle < -45:      # this branch never fires
+    angle = 90 + angle
+```
+
+On OpenCV ≥ 4.9 (pinned in `requirements/basic.txt`), `minAreaRect` returns angles in `[0, 90)`. A page tilted at e.g. 85° gets rotated by 85°, flipping it sideways. Fix:
+```python
+if angle > 45:
+    angle = angle - 90
+```
+
+**2. Parse-failed required doc is double-counted as missing — `core/agent.py:126-164`**
+
+When a required file (e.g. `police_report.pdf`) fails to read, the exception handler at line 126 produces:
+```python
+DocRecord(file_name="police_report.pdf", doc_type="unknown", doc_status="present", ...)
+```
+Then at line 152, `present_types` collects doc types where `doc_status == "present"`. Since the failed record has type `"unknown"`, not `"police_report"`, it isn't in `present_types`. So a `"[missing] police_report"` placeholder is appended at line 154. `determine_status` then hits rule #1 (missing doc → `incomplete`) before it reaches rule #6 (parse_failed → `pending`), contradicting the architecture spec.
+
+**3. `existing.unified_value` can be `None`, causing a Pydantic crash — `core/parser.py:282-283`**
+
+```python
+"document": existing.unified_value if existing else "",
+```
+`existing` is an `ExtractedField` — it can be non-`None` while `unified_value` is `None` (field found in schema but not in document). `ValidationIssue.values` is typed `dict[str, str]`; Pydantic rejects `None` at validation time. Fix: `existing.unified_value or ""`.
+
+**4. Two `NamedTemporaryFile` leaks**
+
+- `core/parser.py:167-171`: temp file for reply text — written with `delete=False` and never removed.
+- `core/doc_reader.py:235-237`: deskewed image file — handle `tmp` is never closed and the file is never removed. These accumulate under `/tmp` for each claim processed.
+
+**5. `temperature=None` passed to HF `.generate()` — `core/llm_adapters.py:250`**
+
+```python
+temperature=self._temperature if do_sample else None,
+```
+HF `transformers` `generate()` does not accept `temperature=None` — it triggers a warning and may default to 1.0 in some generation configs. When `do_sample=False`, omit the kwarg entirely.
+
+**6. Express flag marks zero-issue claims as express — `core/agent.py:386-388`**
+
+```python
+incomplete_express = [
+    c for c in incomplete_all
+    if sum(1 for vi in c.validation_issues if not vi.resolved) < 2
+]
+```
+Missing required documents create placeholder `DocRecord` entries, **not** `ValidationIssue` records. A claim missing all 3 required docs has zero unresolved issues → qualifies as express. A claim with 3 missing required documents is not a quick-to-resolve case.
+
+**7. `_build_customer_message` "complete" branch is unreachable — `core/agent.py:228-232`**
+
+```python
+return "\n\n---\n\n".join(parts) if parts else (
+    templates.get("complete", ...).format(claim_id=claim.claim_id)
+)
+```
+`node_generate_message` is only reached when `status in ("incomplete", "pending")`. A `complete` claim never triggers this node, so the empty-parts fallback to the "complete" template can never execute. Dead code path.
+
+**8. `invalid` and `low_confidence` issue types never produce a customer message — `core/agent.py:209-211`**
+
+`_build_customer_message` builds content for `inconsistency` issues only. `ValidationIssue.issue_type` can also be `"invalid"` or `"low_confidence"` per `models.py:56`. Customers are never told about invalid fields.
+
+**9. Markdown fence stripping is fragile — `core/llm_adapters.py:262-266`**
+
+```python
+if raw.startswith("```"):
+    raw = raw.split("```")[1]
+    if raw.startswith("json"):
+        raw = raw[4:]
+```
+`"jsonc".startswith("json")` is `True`, so a ```` ```jsonc ````-fenced response strips only 4 chars, leaving `"c\n{...}"` → JSON decode failure. Also, `raw.split("```")[1]` is wrong when the content itself contains triple backticks.
+
+**10. PDF pages silently dropped in `QwenLocalAdapter` — `core/llm_adapters.py:206-213`**
+
+```python
+except Exception:
+    pass
+```
+If `pdfplumber` fails for any reason, no images are added for the PDF and the model sees only the prompt text — no warning, no log, silent degradation.
+
+---
+
+### Inconsistencies
+
+**11. Unused imports — `core/agent.py:4,7,11`**
+
+```python
+import os              # never referenced
+from typing import Annotated    # never referenced
+from langgraph.graph.message import add_messages  # never referenced
+```
+
+**12. Duplicate `_sha256` functions**
+
+`core/agent.py:40-42` defines `_sha256_of(path)`. `core/doc_reader.py:23-24` defines `_sha256(path)`. Same logic, two names, two files.
+
+**13. Required types defined in two places**
+
+`core/agent.py:151`:
+```python
+required_types = {"police_report", "finance_agreement", "settlement_breakdown"}
+```
+`core/parser.py:19`:
+```python
+REQUIRED_DOC_TYPES = ["police_report", "finance_agreement", "settlement_breakdown"]
+```
+These will diverge. `node_parse_documents` should reference `REQUIRED_DOC_TYPES` from `parser.py`.
+
+**14. `settings.yaml:1` comment is incomplete**
+
+```yaml
+model_id: "qwen_local" # choose which model to use: "gemini" or "qwen_local"
+```
+The `"qwen"` (API) adapter is also valid, and `LLMClientFactory` supports it at line 286.
+
+**15. Dead `STATUS_ORDER` dict — `core/agent.py:371`**
+
+```python
+STATUS_ORDER = {"complete": 0, "incomplete": 1, "pending": 2}
+```
+Defined, never referenced. The sort below it uses three separate list comprehensions instead.
+
+**16. `(ValueError, Exception)` catch is redundant — `core/agent.py:126`**
+
+`ValueError` is a subclass of `Exception`. The tuple does nothing. Should be `except Exception`.
+
+**17. `TextReader` and `PDFReader`/`ImageReader` have different `doc_type` defaults — `core/doc_reader.py:191,275,322`**
+
+PDF/Image readers default to `"unknown"` when the key is absent. `TextReader` defaults to `"customer_reply"`. Inconsistent fallback behaviour for the same error condition.
+
+**18. `_build_customer_message` generates two separate paragraphs for the same document when it both fails to parse AND is counted as missing (consequence of bug #2)**
+
+A parse-failed required doc produces both a "missing document" block and a "parse failed" block in the customer message, mentioning the same file in two contradictory ways.
+
+**19. `workflow.yaml` `tools:` block is dead configuration**
+
+`config/workflow.yaml:1-17` documents node triggers and descriptions, but no code reads these keys. Only `routing.max_reply_rounds` (line 20) is consumed.
+
+**20. CLAUDE.md:28 uses wrong pytest flag**
+
+```bash
+pytest tests/ -v -k "not integration"
+```
+`-k` filters by test name/ID string. The correct flag to filter by marker is `-m "not integration"`, which is what `pytest.ini:6` documents as the intent. The `-k` version works coincidentally because the path includes the word "integration", but it's semantically incorrect and will break if the directory is renamed.
+
+**21. Integration test docstring says "requires a real API key" but uses mocks — `tests/integration/auto_test_end_to_end.py:3-5`**
+
+The fixture patches `GeminiAdapter.__init__` and injects a mock LLM. No real key is needed.
+
+**22. `CONFIDENCE_RANK` is a local "constant" styled as a module global — `core/agent.py:139`**
+
+All-caps name implies a module-level constant, but it's defined inside `node_parse_documents`. Either hoist it to module level or rename it.
+
+**23. `handle_reply` re-loads `field_schema.json` on every call — `core/parser.py:238-242`**
+
+The agent already loads and holds `self.field_schemas`. `handle_reply` reads and parses the JSON file fresh on every customer reply. The schemas should be passed in.
+
+**24. `_print_claim_summary` loads JSON and discards it — `main.py:24`**
+
+```python
+data = json.loads(claim.model_dump_json(indent=2))
+```
+`data` is never used. The rest of the function reads from the `claim` object directly.
+
+**25. Conversation preview always appends `"..."` — `main.py:59`**
+
+```python
+preview = cr.message[:80].replace("\n", " ")
+print(f"  ... {preview}...")
+```
+If the message is under 80 characters the `"..."` suffix is misleading.
+
+---
+
+### Simplification
+
+**26. `parse_reply` tempfile round-trip is unnecessary**
+
+`TextReader.read` does `Path(file_path).read_text(...)`. The tempfile in `parse_reply` (lines 167-171) could be eliminated by adding a `read_text(text, ...)` overload to `TextReader`, or simply inlining the extraction logic. This also fixes the leak (#4).
+
+**27. Three sorted list comprehensions in `prioritize_claims` — `core/agent.py:373-393`**
+
+Replace with a single sort keyed on `(status_order, uploaded_at)` where `status_order` maps status to priority integer.
+
+**28. `compare_fields` two near-identical `continue` branches — `core/parser.py:200-205`**
+
+```python
+if existing is None or existing.unified_value is None:
+    results[...] = "consistent"; continue
+if field.unified_value is None:
+    results[...] = "consistent"; continue
+```
+Collapse: `if existing is None or existing.unified_value is None or field.unified_value is None`.
+
+**29. `determine_status` iterates `validation_issues` three times — `core/parser.py:106-131`**
+
+Lines 106, 125, 130 each build a separate filtered list from the same list. One pass with a small classification is cleaner.
+
+**30. `ClaimAgent.accept_reply` standalone method is dead code — `core/agent.py:359-366`**
+
+This method exists as "async/webhook entry point" but is never called by `main.py` or the graph. It also instantiates a fresh `ClaimParser()` while the graph node reuses `state["parser"]`, so they can diverge. Either wire it up or remove it.
+
+---
+
+### Summary table
+
+| File | High | Medium | Low |
+|---|---|---|---|
+| `core/doc_reader.py` | deskew inverted (#1), parse-failed double-count (#2), tempfile leak (#4) | silent PDF drop (#10) | TextReader default inconsistency (#17) |
+| `core/agent.py` | — | express flag (#6), unreachable branch (#7), no-message for invalid/low_conf (#8) | unused imports (#11), dead STATUS_ORDER (#15), dead accept_reply (#30) |
+| `core/parser.py` | None crash (#3), tempfile leak (#4) | re-loads schema every call (#23) | redundant iterations (#29), compare_fields (#28) |
+| `core/llm_adapters.py` | — | temperature=None (#5), fence strip (#9) | — |
+| `main.py` | — | — | dead `data` var (#24), always-"..." (#25) |
+| Config/docs | — | wrong `-k` flag (#20), wrong comment (#14) | dead workflow.yaml block (#19) |
+
+======================================================================
+USER
+======================================================================
+then should we create a TODO.md and let me ask the coding agent to fix all these
+
+----------------------------------------------------------------------
+ASSISTANT
+----------------------------------------------------------------------
+Yes, that's a clean workflow. Let me write it now.
+
+----------------------------------------------------------------------
+ASSISTANT
+----------------------------------------------------------------------
+[Write: /home/imrui/Jaseci-Lab-AI-Engineer-take-home/TODO.md]
+
+----------------------------------------------------------------------
+ASSISTANT
+----------------------------------------------------------------------
+`TODO.md` is created at the repo root with all 24 items (8 High, 5 Medium, 11 Low), each with file path, line numbers, root cause, and a concrete fix suggestion.
+
+When you hand this to a coding agent, a good prompt would be something like:
+
+> "Work through `TODO.md` top to bottom. Fix each item, run `pytest tests/ -v -m 'not integration'` after each change to make sure nothing regresses, and check off completed items."
+
+One heads-up for the agent: **H2** (parse-failed double-count) is the trickiest because the suggested fix in the TODO is a heuristic. A cleaner alternative is to have `node_parse_documents` track which required file names were *attempted* before they failed, rather than trying to infer it from the `doc_type` after the fact.
+
+======================================================================
+USER
+======================================================================
+how to improve the naming and readability of this code, should we put all import above all code? sometimes simple naming is better also I feel like there's too many try catch or similar things out there. Also please let me know if any design is overengineered
+
+----------------------------------------------------------------------
+ASSISTANT
+----------------------------------------------------------------------
+Let me read the current state of the files since many fixes have already been applied.
+
+----------------------------------------------------------------------
+ASSISTANT
+----------------------------------------------------------------------
+[Read: /home/imrui/Jaseci-Lab-AI-Engineer-take-home/core/agent.py]
+
+----------------------------------------------------------------------
+ASSISTANT
+----------------------------------------------------------------------
+[Read: /home/imrui/Jaseci-Lab-AI-Engineer-take-home/core/doc_reader.py]
+
+----------------------------------------------------------------------
+ASSISTANT
+----------------------------------------------------------------------
+[Read: /home/imrui/Jaseci-Lab-AI-Engineer-take-home/core/parser.py]
+
+----------------------------------------------------------------------
+ASSISTANT
+----------------------------------------------------------------------
+[Read: /home/imrui/Jaseci-Lab-AI-Engineer-take-home/core/llm_adapters.py]
+
+----------------------------------------------------------------------
+ASSISTANT
+----------------------------------------------------------------------
+Good question. Now that the bugs are fixed, here's an honest structural critique:
+
+---
+
+## 1. Imports: move stdlib to the top
+
+The lazy imports split into two categories — keep one, fix the other.
+
+**Keep lazy** (protecting against missing optional dependencies):
+- `pdfplumber`, `cv2`, `numpy` in `doc_reader.py` — not everyone installs these
+- `google.genai`, `openai`, `transformers`, `torch`, `PIL`, `qwen_vl_utils` in `llm_adapters.py` — split between requirements files by design
+
+**Move to top** (stdlib has no install cost):
+- `core/agent.py:32` — `import json` inside `_load_field_schemas()`
+- `core/parser.py:165` — `import os` inside `parse_reply()`
+- `core/llm_adapters.py:134-135` — `import base64` and `import mimetypes` inside `QwenAdapter.generate()`
+
+---
+
+## 2. Naming
+
+**Rename for clarity:**
+
+| Current | Better | Why |
+|---|---|---|
+| `_sha256` | `_hash_file` | Callers want "a content hash", not "SHA-256 specifically" |
+| `_express_eligible` | `_is_express_eligible` | Bool-returning functions should read as a predicate |
+| `_priority_group` | `_priority_key` | Makes clear it returns a sort key, not a semantic group |
+| `target_fields` | `schemas` | It's a `list[FieldSchema]`; "target" adds no information |
+| `log_reply` | `record_reply` | "log" is ambiguous (could mean logging to a logger); this appends to the conversation |
+| `parse_reply` | `extract_reply_fields` | The function does extraction + trust override, not just parsing |
+
+**Inconsistency in `target_fields` vs `field_schemas` vs `schemas`:**
+
+`ClaimState` calls it `field_schemas`, `handle_reply` uses `field_schemas`, but all the `read()` methods use `target_fields`. Pick one and use it everywhere. `schemas` is the shortest and the type already says `list[FieldSchema]`.
+
+---
+
+## 3. Too many try/except
+
+**`call_vlm` has a redundant dual-except** — `core/doc_reader.py:127-130`:
+
+```python
+except ParseFailedError as exc:
+    last_exc = exc
+except Exception as exc:
+    last_exc = exc
+```
+
+`ParseFailedError` is a subclass of `Exception`. Both branches do identical things. Collapse to:
+```python
+except Exception as exc:
+    last_exc = exc
+```
+
+**The parse-fail `DocRecord` construction is copy-pasted three times** — `PDFReader.read`, `ImageReader.read`, `TextReader.read` each have:
+
+```python
+except ParseFailedError as exc:
+    return DocRecord(
+        file_name=Path(file_path).name,
+        doc_type="unknown",
+        doc_role="other",
+        source_trust="document",
+        parse_status="parse_failed",
+        status_reason=str(exc),
+        content_hash=content_hash,
+        raw_text=...,  # varies
+    )
+```
+
+Extract onto `BaseDocReader`:
+```python
+def _failed_record(self, file_path: str, exc: Exception, content_hash: str | None = None, raw_text: str | None = None) -> DocRecord:
+    return DocRecord(
+        file_name=Path(file_path).name,
+        doc_type="unknown",
+        doc_role="other",
+        source_trust="document",
+        parse_status="parse_failed",
+        status_reason=str(exc),
+        content_hash=content_hash,
+        raw_text=raw_text,
+    )
+```
+
+Each reader's except block becomes one line: `return self._failed_record(file_path, exc, content_hash, raw_text)`.
+
+---
+
+## 4. Overengineered design
+
+**`DocReaderFactory` is a Java-ism**
+
+A class with a single `@staticmethod` is just a namespaced function. In Python, a module-level function is cleaner:
+
+```python
+# instead of DocReaderFactory.get_reader(path)
+def get_doc_reader(file_path: str) -> BaseDocReader: ...
+```
+
+**`BaseDocReader.read` should be `@abstractmethod`**
+
+The current pattern:
+```python
+def read(self, ...) -> DocRecord:  # pragma: no cover
+    raise NotImplementedError
+```
+
+`# pragma: no cover` on an intentionally abstract method is a smell. This is what ABCs exist for:
+
+```python
+from abc import ABC, abstractmethod
+
+class BaseDocReader(ABC):
+    @abstractmethod
+    def read(self, file_path: str, schemas: list[FieldSchema], client: BaseLLMClient) -> DocRecord: ...
+```
+
+**`_load_pdf_threshold()` reads `settings.yaml` on every single PDF parse**
+
+Every call to `PDFReader.read` opens and parses the YAML file. The threshold never changes at runtime. Either cache it at module level:
+
+```python
+_PDF_TEXT_THRESHOLD: int | None = None
+
+def _pdf_text_threshold() -> int:
+    global _PDF_TEXT_THRESHOLD
+    if _PDF_TEXT_THRESHOLD is None:
+        _PDF_TEXT_THRESHOLD = yaml.safe_load(...)...
+    return _PDF_TEXT_THRESHOLD
+```
+
+Or (simpler) pass it as a constructor arg to `PDFReader`.
+
+**Stateless services stuffed into LangGraph state**
+
+`ClaimState` contains `llm_client`, `chatbot`, `workflow_config`, `message_config`, `parser` — none of these change between nodes. Only `claim` and `reply_skipped` are actually stateful. Putting immutable services into graph state:
+- Forces every node to unpack things it doesn't use
+- Invites LangGraph to attempt serialization of objects (adapters, chatbot) that shouldn't be serialized
+
+Since `ClaimAgent` already owns these as `self.*`, the node functions could close over them instead:
+
+```python
+def _build_graph(self):
+    # capture self in closures — nodes become simple, state stays minimal
+    def parse_documents(state):
+        return node_parse_documents(state, self.field_schemas, self.llm_client)
+    ...
+```
+
+Or keep the current approach but narrow `ClaimState` to only the values that actually change: `claim` and `reply_skipped`. Constant services live on `self`.
+
+**`determine_status` check at lines 136-156 has two overlapping "required" checks**
+
+Steps 9 and 10 in `determine_status` both check for required docs — `check_required_docs` (step 9) and the `required_complete` `all()` (step 10). The `check_required_docs` call at step 9 can only be reached if all the earlier guards pass, at which point it should be redundant with the `doc_status == "missing"` check at step 1. It's defensive but creates cognitive overhead when reading the function.
+
+---
+
+## Summary of changes worth making
+
+| Category | Change | Effort |
+|---|---|---|
+| Imports | Move `json`, `os`, `base64`, `mimetypes` to top | Trivial |
+| Naming | Rename 6 identifiers above | Small |
+| Naming | Unify `target_fields`/`schemas`/`field_schemas` | Small |
+| try/except | Collapse `call_vlm` dual except | 1 line |
+| try/except | Extract `_failed_record` on BaseDocReader | 10 lines, removes ~30 |
+| Design | `DocReaderFactory` → module function | 3 lines |
+| Design | `BaseDocReader.read` → `@abstractmethod` | 2 lines |
+| Design | Cache `_load_pdf_threshold` | 5 lines |
+| Design | Shrink `ClaimState` to mutable-only fields | Medium refactor |
+
+======================================================================
+USER
+======================================================================
+please update these to TODO.md
+
+----------------------------------------------------------------------
+ASSISTANT
+----------------------------------------------------------------------
+[Read: /home/imrui/Jaseci-Lab-AI-Engineer-take-home/TODO.md]
+
+----------------------------------------------------------------------
+ASSISTANT
+----------------------------------------------------------------------
+[Edit: /home/imrui/Jaseci-Lab-AI-Engineer-take-home/TODO.md]
+
+----------------------------------------------------------------------
+ASSISTANT
+----------------------------------------------------------------------
+Done. Added three new sections at the bottom of `TODO.md`:
+
+- **Readability & Naming** (R1–R3): stdlib imports to move to top, 6 rename candidates, unified parameter naming
+- **Try/Except Cleanup** (T1–T2): collapse the redundant dual-except in `call_vlm`, extract `_failed_record` on `BaseDocReader` to eliminate the copy-pasted parse-fail block
+- **Design / Overengineered** (D1–D5): `DocReaderFactory` → module function, `BaseDocReader` → proper ABC, cache the YAML threshold read, shrink LangGraph state to mutable-only fields, and the redundant step-9 check in `determine_status`

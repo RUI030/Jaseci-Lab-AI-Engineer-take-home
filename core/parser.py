@@ -604,13 +604,29 @@ class ClaimParser:
         inbound = [r for r in claim.conversation_log if r.direction == "inbound"]
         if not inbound:
             return
-        last = inbound[-1]
+        last_inbound = inbound[-1]
+
+        # Find the outbound message that immediately preceded this inbound reply
+        preceding_outbound: str | None = None
+        for r in reversed(claim.conversation_log):
+            if r.round >= last_inbound.round:
+                continue
+            if r.direction == "outbound":
+                preceding_outbound = r.message
+                break
+
         current = claim.conversation_summary or "(no prior summary — this is the first reply)"
+        our_message_section = (
+            f"Our message to the customer (round {last_inbound.round - 1}):\n{preceding_outbound}"
+            if preceding_outbound
+            else "(no prior outbound message — customer replied before we contacted them)"
+        )
         prompt = guideline_tmpl.format(
             claim_id=claim.claim_id,
             current_summary=current,
-            round=last.round,
-            reply_text=last.message,
+            round=last_inbound.round,
+            our_message=our_message_section,
+            reply_text=last_inbound.message,
         )
         try:
             result = llm_client.generate_text(prompt)
@@ -711,3 +727,37 @@ class ClaimParser:
                     )
 
         return "\n".join(lines)
+
+    def merge_summary_fields(
+        self,
+        claim: Claim,
+        llm_client: BaseLLMClient,
+        schemas: list[FieldSchema],
+    ) -> None:
+        """Extract fields from conversation_summary and merge into extracted_fields.
+
+        Fills in fields absent from documents without overriding document-extracted
+        medium/high confidence values. All summary fields receive source_trust='user_input'
+        and confidence='low' via extract_reply_fields.
+        """
+        if not claim.conversation_summary:
+            return
+        try:
+            fields = self.extract_reply_fields(claim.conversation_summary, schemas, llm_client)
+            for field in fields:
+                if not field.unified_value:
+                    continue
+                # Bump to medium: summary fields are customer-confirmed answers to direct questions,
+                # not raw unsolicited text. Still loses to high-confidence document extractions.
+                field.confidence = "medium"
+                field.confidence_note = (
+                    (field.confidence_note + " " if field.confidence_note else "")
+                    + "Elevated from low: extracted from LLM-curated conversation summary."
+                ).strip()
+                existing = claim.extracted_fields.get(field.field_name)
+                if existing is None:
+                    claim.extracted_fields[field.field_name] = field
+                elif _CONF_WEIGHT.get(field.confidence, 0) > _CONF_WEIGHT.get(existing.confidence, 0):
+                    claim.extracted_fields[field.field_name] = field
+        except Exception:
+            pass

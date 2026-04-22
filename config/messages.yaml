@@ -6,15 +6,25 @@ conversation_summary_guideline: |
   Current summary:
   {current_summary}
 
+  {our_message}
+
   New customer reply (round {round}):
   {reply_text}
 
-  Update the summary to capture all useful information the customer has provided.
-  Be concise (3–5 sentences). For each item note whether it is:
-  - CONFIRMED: customer explicitly agreed with our value
-  - CORRECTED: customer provided a different value than our best guess
-  - ACKNOWLEDGED: customer addressed the issue but did not give a definitive answer
-  - PENDING: issue was raised but customer did not respond to it yet
+  Update the summary to capture what both sides have said.
+  Be concise (4–6 sentences). Track the following:
+
+  Customer-provided information — tag each item:
+  - CONFIRMED: customer explicitly agreed with our stated value
+  - CORRECTED: customer gave a different value from our best guess
+  - ACKNOWLEDGED: customer addressed the topic without committing to a specific value
+  - PENDING: we asked but the customer has not yet responded
+
+  What we have already told the customer — track this so we do not repeat ourselves:
+  - WE_SAID: note any commitments, instructions, or information we gave the customer
+    (e.g. "gap insurance not required — WE_SAID no action needed",
+     "police report — WE_SAID we are waiting for it")
+
   Also capture: reasons for missing documents, promised submission dates, any circumstances mentioned.
 
   Output only the updated summary text — no preamble, no labels, no commentary.

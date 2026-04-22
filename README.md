@@ -84,9 +84,9 @@ python main.py --claim claims/CLM-001 --no-cache
 ```
 
 Results are cached to `<claim_folder>/.cache/claim_state.json` after each run. On subsequent runs:
-- `complete` claims are loaded from cache and skipped.
-- `incomplete` and `needs_review` claims are always re-processed (new documents may have been added).
-- `--no-cache` forces a full re-run for every claim, including complete ones.
+- `complete` and `needs_review` claims are loaded from cache and skipped — they are terminal states until staff intervenes (`--no-cache` to reset).
+- `incomplete` claims are re-processed — any new `.txt` reply files in the folder are auto-loaded as customer replies.
+- `--no-cache` forces a full re-run for every claim.
 
 ---
 

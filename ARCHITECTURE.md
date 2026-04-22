@@ -54,11 +54,14 @@ class Chatbot:
 
 **LangGraph graph** (`ClaimAgent._build_graph`):
 - Entry → `parse_documents` → `cross_validate`
-- Conditional after `cross_validate`: if status is `incomplete` or `needs_review` → `generate_message` → `accept_reply`
+- Conditional after `cross_validate`:
+  - status is `incomplete` AND `reply_queue` is non-empty → `accept_reply` directly (customer already replied — process before sending anything)
+  - status is `incomplete` AND `reply_queue` is empty → `generate_message` → `accept_reply`
+  - status is `complete` or `needs_review` → END
 - Conditional after `accept_reply`: if reply was not skipped and under `max_reply_rounds` → `cross_validate` again; else END
 - Routing is deterministic/conditional, not LLM-driven (compliance requirement — insurance claim processing has well-defined states where unpredictable LLM-driven tool selection would be a liability)
 
-**State:** `ClaimState` is a `TypedDict` holding `claim`, `folder_path`, `field_schemas`, `llm_client`, `chatbot`, `workflow_config`, `message_config`, `parser`, and `reply_skipped`. Note: `llm_client`, `chatbot`, and `parser` are non-serialisable objects; LangGraph checkpointing is not available without moving these to `ClaimAgent` instance variables.
+**State:** `ClaimState` is a `TypedDict` holding `claim`, `folder_path`, `field_schemas`, `llm_client`, `chatbot`, `workflow_config`, `message_config`, `parser`, `reply_skipped`, and `reply_queue`. `reply_queue` is a `list[str]` pre-loaded with `.txt` file contents during `parse_documents`; `node_accept_reply` drains it before falling back to stdin. Note: `llm_client`, `chatbot`, and `parser` are non-serialisable objects; LangGraph checkpointing is not available without moving these to `ClaimAgent` instance variables.
 
 #### ADT
 
@@ -82,10 +85,10 @@ class ClaimAgent:
 |------|------------------|
 | `parse_documents` | entry point |
 | `cross_validate` | after all documents parsed; also after each accepted reply |
-| `generate_message` | status is `incomplete` or `needs_review` |
-| `accept_reply` | after every outbound customer message |
+| `generate_message` | status is `incomplete` AND `reply_queue` is empty |
+| `accept_reply` | after `generate_message`; also directly from `cross_validate` when `reply_queue` is non-empty |
 
-**Customer message format:** `ClaimParser.build_customer_message` assembles a single unified email from body fragments defined in `config/messages.yaml`. One greeting, numbered issue list, one sign-off — regardless of how many issues are present. Warning-severity inconsistencies get a non-alarming fragment; blocking ones ask the customer to clarify.
+**Customer message format:** `ClaimParser.build_customer_message_llm` composes the outbound email using an LLM guided by structured claim context and writing guidelines from `config/messages.yaml`. The context includes: document status, our best-guess value for each flagged field, and a running `conversation_summary` of what the customer has previously told us. If the LLM call fails, `ClaimParser.build_customer_message` (template-based) is used as a fallback. `needs_review` claims never trigger `generate_message` — they require staff action, not a customer reply.
 
 **Claim prioritisation logic:**
 
@@ -161,11 +164,36 @@ class ClaimParser:
     ) -> Claim
     # orchestrator: extract_reply_fields → compare_fields → record_reply → determine_status
 
+    def build_customer_message_llm(
+        self, claim: Claim,
+        llm_client: BaseLLMClient,
+        message_config: dict
+    ) -> str
+    # primary path: LLM-composed email guided by claim context + guidelines from messages.yaml
+    # context includes conversation_summary, best-guess field values, and document status
+    # raises on LLM failure → caller falls back to build_customer_message
+
     def build_customer_message(
         self, claim: Claim,
         message_config: dict
     ) -> str
-    # assembles a single unified outbound email from issue_fragments in messages.yaml
+    # fallback: assembles a unified email from issue_fragments templates in messages.yaml
+
+    def update_conversation_summary(
+        self, claim: Claim,
+        llm_client: BaseLLMClient,
+        message_config: dict
+    ) -> None
+    # called after every accepted reply; uses LLM to update claim.conversation_summary
+    # summary tracks confirmed/corrected/pending items across rounds; used by build_customer_message_llm
+    # best-effort: silently skips on failure so claim processing is never blocked
+
+    def resolve_multiple_versions(
+        self, claim: Claim
+    ) -> None
+    # compares fields between authoritative and duplicate (multiple_versions) DocRecords
+    # adds blocking ValidationIssue if numeric fields differ by >10% or string fields mismatch
+    # adds warning ValidationIssue if values are within tolerance
 ```
 
 **Confidence-aware inconsistency severity:**
@@ -275,7 +303,11 @@ class BaseLLMClient(ABC):
         response_schema: type[BaseModel],
         files: list[str] | None = None
     ) -> dict
-    # raises ParseFailedError on malformed response or after retries exhausted
+    # structured extraction: enforces JSON schema; raises ParseFailedError on failure
+
+    def generate_text(self, prompt: str) -> str
+    # plain-text generation without JSON schema constraints; used for customer messages and summaries
+    # temperature fixed at 0.4 for natural language variety
 
 class GeminiAdapter(BaseLLMClient):
     # enforces structured output via response_mime_type + response_schema
@@ -336,7 +368,8 @@ class Claim(BaseModel):
     doc_table: list[DocRecord]
     extracted_fields: dict[str, ExtractedField]  # highest-confidence wins per field
     validation_issues: list[ValidationIssue]
-    conversation_log: list[ConversationRound]
+    conversation_log: list[ConversationRound]    # full raw message history (outbound + inbound)
+    conversation_summary: str                    # LLM-maintained running summary; updated after each reply
     reply_count: int
     tools_used: list[dict]
     # each entry: {"tool": "<name>", "input": {...}, "result": {...}}
@@ -383,7 +416,8 @@ class DocRecord(BaseModel):
     doc_status: Literal["present", "missing", "duplicate"]
     duplicate_type: Literal["same_filename", "same_content", "multiple_versions"] | None
     # same_filename → incomplete (customer-fixable)
-    # same_content / multiple_versions → needs_review (human judgment needed)
+    # same_content → needs_review (human judgment needed)
+    # multiple_versions → resolve_multiple_versions compares fields; result may add blocking issue → needs_review
     status_reason: str | None
     content_hash: str | None        # SHA-256, used for duplicate detection
     raw_text: str | None
@@ -452,7 +486,8 @@ A claim cannot reach `complete` status if any required document is missing or ha
 2. any duplicate_type == "same_filename"                      → incomplete
 
 # needs_review — all docs present but human judgment needed
-3. any duplicate_type == "same_content" or "multiple_versions" → needs_review
+3. any duplicate_type == "same_content"                       → needs_review
+   (multiple_versions is NOT a direct trigger; resolve_multiple_versions may add a blocking issue → rule 4)
 4. any unresolved blocking inconsistency                      → needs_review
    (warning-severity inconsistencies do not affect routing)
 5. any parse_status == "parse_failed"                         → needs_review
@@ -517,19 +552,26 @@ ClaimAgent
     │           check_field_consistency / validate_vin → Claim.tools_used
     │       ClaimParser.determine_status → complete / incomplete / needs_review
     │
-    ├── [if incomplete or needs_review]
+    ├── [if incomplete AND reply_queue empty]
     │       node_generate_message
-    │           ClaimParser.build_customer_message → single unified email (from messages.yaml fragments)
-    │           → chatbot.display() + ConversationRound appended
+    │           ClaimParser.build_customer_message_llm (LLM-composed, guidelines + claim context)
+    │               context: conversation_summary, best-guess field values, document status
+    │           fallback on failure: ClaimParser.build_customer_message (template)
+    │           → chatbot.display() + ConversationRound(direction="outbound") appended
     │
-    ├── [waiting for customer reply]
+    ├── [if incomplete AND reply_queue non-empty, or after generate_message]
     │       node_accept_reply
-    │           chatbot.ask() → reply_text
+    │           if reply_queue non-empty:
+    │               pop reply_text from queue; chatbot.display("[Auto-loaded]" preview)
+    │           else:
+    │               chatbot.ask() → reply_text  (returns "" on EOF for non-interactive runs)
     │           ClaimParser.handle_reply(claim, reply_text, llm_client, schemas)
     │               ├── extract_reply_fields (TextReader, source_trust = "user_input")
     │               ├── compare_fields
-    │               ├── record_reply → conversation_log
+    │               ├── record_reply → ConversationRound(direction="inbound") appended
     │               └── determine_status → updated Claim.status
+    │           ClaimParser.update_conversation_summary(claim, llm_client, message_config)
+    │               └── LLM distils reply into claim.conversation_summary (best-effort)
     │           → loop back to node_cross_validate if under max_reply_rounds
     │
     └── [after processing]
@@ -551,7 +593,7 @@ claims/
         └── claim_state.json       ← full serialised Claim; single source of truth
 ```
 
-`conversation_log` is serialised as part of `claim_state.json`. There is no separate conversation file — a single file eliminates the risk of drift between two representations of the same state.
+`conversation_log` and `conversation_summary` are both serialised as part of `claim_state.json`. There is no separate conversation file — a single file eliminates the risk of drift between two representations of the same state.
 
 ---
 
@@ -561,7 +603,7 @@ claims/
 |------|---------|
 | `config/field_schema.json` | Field definitions, validation rules, unify instructions |
 | `config/workflow.yaml` | `max_reply_rounds` and other routing parameters |
-| `config/messages.yaml` | `customer_email` wrapper template, `issue_fragments` body snippets, `priority_reason` strings |
+| `config/messages.yaml` | `customer_message_guideline` (LLM prompt for outbound messages), `conversation_summary_guideline` (LLM prompt for summary updates), `customer_email` + `issue_fragments` (template fallback), `priority_reason` strings |
 | `config/settings.yaml` | `model_id`, model parameters, `pdf_text_threshold`, `retry` block |
 
 ---
@@ -578,7 +620,9 @@ claims/
 
 **Human input is never trusted.** Customer replies are parsed with `source_trust = "user_input"` and a hard confidence cap of `low`. Reply data is recorded for audit but never used to auto-resolve issues.
 
-**Single unified customer email.** All issues (missing docs, parse failures, inconsistencies) are collected and sent as one email per interaction cycle. Individual sections are body fragments in `config/messages.yaml`; the outer wrapper (greeting + sign-off) is a single template. This avoids sending multiple disjointed emails for the same claim in the same round.
+**LLM-composed customer messages with template fallback.** The primary path (`build_customer_message_llm`) passes structured claim context — document status, best-guess field values, and the running `conversation_summary` — to the LLM with guidelines in `config/messages.yaml`. The LLM composes a natural, context-aware email: it acknowledges prior replies, presents our best-guess values for confirmation rather than asking open "which is correct?" questions, and distinguishes blocking issues (customer must act) from warning-level ones (staff will handle). A template-based fallback (`build_customer_message`) fires if the LLM call fails. Both paths produce a single unified email per interaction cycle to avoid sending multiple disjointed messages for the same claim.
+
+**Running conversation summary.** `Claim.conversation_summary` is an LLM-maintained rolling summary updated after every customer reply. It tracks confirmed/corrected/pending items across rounds and is fed into the message context so the LLM never re-asks for information the customer has already addressed. The raw `conversation_log` is preserved for audit; the summary exists solely to keep the message context window small and accurate as the conversation grows.
 
 **Status enum matches the spec.** `complete | incomplete | needs_review` map directly to who acts next: nobody, the customer, and company staff respectively.
 

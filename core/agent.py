@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -120,7 +121,6 @@ def node_parse_documents(state: ClaimState) -> ClaimState:
             continue
 
         # --- classify and read the document ---
-        claim.tools_used.append(classify_document(file_name))
         try:
             reader = get_doc_reader(str(file_path))
             record = reader.read(str(file_path), schemas, client)
@@ -141,6 +141,7 @@ def node_parse_documents(state: ClaimState) -> ClaimState:
                 content_hash=content_hash,
                 status_reason=str(exc),
             )
+        claim.tools_used.append(classify_document(file_name, actual_type=record.doc_type))
         claim.doc_table.append(record)
 
     # --- merge extracted_fields (highest confidence wins per field) ---
@@ -157,7 +158,6 @@ def node_parse_documents(state: ClaimState) -> ClaimState:
 
     # --- multiple_versions: flag later-processed docs when same doc_type appears more than once ---
     # Exclude customer_reply — multiple .txt files are sequential replies, not version conflicts.
-    from collections import Counter
     type_counts = Counter(
         r.doc_type for r in claim.doc_table
         if r.doc_status == "present" and r.doc_type not in ("unknown", "customer_reply")
@@ -222,7 +222,8 @@ def node_generate_message(state: ClaimState) -> ClaimState:
         message = parser.build_customer_message_llm(claim, llm_client, message_config)
         if not isinstance(message, str) or not message.strip():
             raise ValueError("LLM returned empty or non-string message")
-    except Exception:
+    except Exception as exc:
+        chatbot.display(f"  [warn] LLM message generation failed ({exc}); using template.")
         message = parser.build_customer_message(claim, message_config)
 
     chatbot.display(f"\n[Message to customer]\n{message}")
@@ -256,6 +257,7 @@ def node_accept_reply(state: ClaimState) -> ClaimState:
     if reply_text.strip():
         parser.handle_reply(claim, reply_text, client, state["field_schemas"])
         parser.update_conversation_summary(claim, client, state["message_config"])
+        parser.merge_summary_fields(claim, client, state["field_schemas"])
         skipped = False
     else:
         # Customer skipped — if any open resubmit request exists, treat as refusal → human review
