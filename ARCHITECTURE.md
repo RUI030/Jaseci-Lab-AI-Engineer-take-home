@@ -12,7 +12,7 @@ Chatbot        (core/chatbot.py)      — IO only, no business logic
                     └── LLMAdapters (core/llm_adapters.py) — Gemini / Qwen clients
 ```
 
-Shared utilities (YAML loading, schema loading) live in `core/utils.py`. Named tool functions (`validate_vin`, `check_field_consistency`, `classify_document`) live in `core/tools.py` and are called conditionally by `ClaimAgent` and `ClaimParser`. Priority scheduling logic (sorting, express eligibility) lives in `core/scheduler.py` — stateless functions with no dependency on the LLM or graph.
+Shared utilities (YAML loading, schema loading) live in `core/utils.py`. Named tool functions (`validate_vin`, `check_field_consistency`, `classify_document`) live in `core/tools.py`; `validate_vin` and `check_field_consistency` are dispatched at runtime by the byLLM ReAct loop (`run_cross_validation`), while `classify_document` is called directly by `ClaimAgent`. Priority scheduling logic (sorting, express eligibility) lives in `core/scheduler.py` — stateless functions with no dependency on the LLM or graph.
 
 **Entry point assumption:** Input files are assumed to have been uploaded to a local claim folder before processing begins.
 
@@ -133,12 +133,14 @@ class ClaimParser:
     # returns list of required doc types that are absent
 
     def cross_validate(
-        self, claim: Claim
+        self, claim: Claim,
+        field_schemas: list[FieldSchema] | None = None
     ) -> list[ValidationIssue]
     # compares unified_value of each field across all document sources
     # only processes source_trust == "document"
     # never modifies confidence values
     # assigns severity: "blocking" or "warning" (see below)
+    # when field_schemas is provided, dispatches run_cross_validation (byLLM ReAct) to populate tools_used
 
     def determine_status(
         self, claim: Claim
@@ -369,14 +371,30 @@ def classify_document(file_name: str, actual_type: str | None = None) -> dict
 
 def validate_vin(vin: str) -> dict
 # checks VIN length and character set
-# called by ClaimParser.cross_validate when a VIN field is present
+# exposed as a tool to the byLLM ReAct loop in run_cross_validation
 
-def check_field_consistency(field_name: str, values: dict[str, str]) -> dict
-# compares values across sources; returns consistent/inconsistent + differing values
-# called by ClaimParser.cross_validate for each multi-source field
+def check_field_consistency(field_name: str, values_json: str) -> dict
+# values_json: JSON string mapping source_document to value,
+#   e.g. '{"police_report.pdf": "ABC123", "finance_agreement.pdf": "XYZ789"}'
+# compares values across sources; returns consistent/inconsistent + unique_values list
+# exposed as a tool to the byLLM ReAct loop in run_cross_validation
+
+@dataclass
+class ValidationReport:
+    issues_found: list[str]   # human-readable issue descriptions from the LLM
+    recommendation: str       # "complete" | "incomplete" | "needs_review"
+
+@by(_tool_llm)  # byLLM ReAct loop — Gemini 2.5 Flash + [validate_vin, check_field_consistency]
+def run_cross_validation(fields_by_source: dict, field_schemas: list) -> ValidationReport
+# LLM-driven dispatcher: given fields and their per-source values, decides which tools to call.
+# Called by ClaimParser.cross_validate when field_schemas is provided (production path).
+# Skipped in unit tests (field_schemas=None guard) to avoid real API calls.
+# Result logged as a single {"tool": "run_cross_validation", ...} entry in Claim.tools_used.
 ```
 
-Each function returns `{"tool": "<name>", "input": {...}, "result": {...}}` — the same dict appended to `Claim.tools_used`.
+`classify_document` and `run_cross_validation` each append one entry to `Claim.tools_used`:
+`{"tool": "<name>", "input": {...}, "result": {...}}`.
+`run_cross_validation` records the aggregated LLM recommendation and issues list rather than one entry per field.
 
 ---
 
@@ -574,8 +592,8 @@ ClaimAgent
     │       insert missing-doc placeholder DocRecords
     │
     ├── node_cross_validate
-    │       ClaimParser.cross_validate → list[ValidationIssue] (blocking or warning)
-    │           check_field_consistency / validate_vin → Claim.tools_used
+    │       ClaimParser.cross_validate(claim, field_schemas) → list[ValidationIssue] (blocking or warning)
+    │           run_cross_validation (byLLM ReAct: validate_vin + check_field_consistency) → Claim.tools_used
     │       ClaimParser.determine_status → complete / incomplete / needs_review
     │
     ├── [all statuses, unless incomplete AND reply_queue non-empty]
@@ -645,7 +663,7 @@ claims/
 
 **Conditional dispatch, not hardcoded pipeline.** LangGraph conditional edges decide which node to invoke based on `ClaimState`. Deterministic routing is justified in this domain — insurance claim processing has well-defined states and compliance requirements that make unpredictable LLM-driven tool selection a liability.
 
-**Tool invocation is Python-conditional, not LLM-driven.** `validate_vin` is called only when a VIN field has conflicting values across documents. `check_field_consistency` is called only for fields that appear in more than one source. `classify_document` is called once per file after VLM extraction. The conditions are implemented in Python (`ClaimParser.cross_validate`, `node_parse_documents`) rather than by an LLM choosing tools at runtime. `UPGRADE.md` documents a byLLM migration path that would convert these to true runtime LLM-driven tool selection.
+**Cross-validation tool dispatch is LLM-driven via byLLM.** `validate_vin` and `check_field_consistency` are exposed as tools to a `@by(llm)` decorated `run_cross_validation` function (Gemini 2.5 Flash, max 10 ReAct iterations). At runtime, the LLM decides which tools to call and in what order — it is not hardcoded Python logic. The Python `ClaimParser.cross_validate` loop still generates `ValidationIssue` objects (with severity, resubmit_doc, etc.) for deterministic routing compliance; `run_cross_validation` is responsible only for populating `Claim.tools_used` with the LLM-selected audit trail. `classify_document` remains Python-conditional (once per file, no LLM decision needed).
 
 **Confidence is immutable after extraction.** Assigned by `DocReader` once and never modified. Every value is traceable to its source document and extraction method.
 
