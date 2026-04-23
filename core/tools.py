@@ -27,17 +27,12 @@ def validate_vin(vin: str) -> dict:
     }
 
 
-def check_field_consistency(field_name: str, values_json: str) -> dict:
+def check_field_consistency(field_name: str, values: dict[str, str]) -> dict:
     """Check whether all source values for a field are identical.
 
-    values_json must be a JSON string mapping source_document to value,
-    e.g. '{"police_report.pdf": "ABC123", "finance_agreement.pdf": "XYZ789"}'.
+    values maps source_document to unified_value,
+    e.g. {"police_report.pdf": "ABC123", "finance_agreement.pdf": "XYZ789"}.
     """
-    import json
-    try:
-        values: dict = json.loads(values_json)
-    except (json.JSONDecodeError, TypeError):
-        values = {}
     unique = set(values.values())
     consistent = len(unique) <= 1
     return {
@@ -71,8 +66,7 @@ def classify_document(file_name: str, actual_type: str | None = None) -> dict:
 @dataclass
 class ValidationReport:
     """Structured result returned by the LLM-driven validation agent."""
-    issues_found: list[str] = field(default_factory=list)  # human-readable issue descriptions
-    recommendation: str = ""                               # "complete" | "incomplete" | "needs_review"
+    issues_found: list[str] = field(default_factory=list)
 
 
 try:
@@ -82,24 +76,17 @@ try:
         model_name="gemini/gemini-2.5-flash",
         config={"api_key": os.environ.get("GEMINI_API_KEY", "")},
     )
-    # Set tools + cap iterations so the ReAct loop always terminates.
-    # __call__ replaces call_params entirely, so set both keys together here.
-    _tool_llm.call_params = {
-        "tools": [validate_vin, check_field_consistency],
-        "max_react_iterations": 10,
-    }
 
-    @by(_tool_llm)
+    @by(_tool_llm, tools=[validate_vin, check_field_consistency])
     def run_cross_validation(fields_by_source: dict, field_schemas: list) -> ValidationReport:
         """
         Validate extracted insurance claim fields using the available tools.
 
         fields_by_source maps each field_name to a dict of {source_document: unified_value}.
         For every VIN field (field name contains 'vin'), call validate_vin for each unique value.
-        For any field that has more than one source document, call check_field_consistency
-        with the field_name and values_json as a JSON string of {source_doc: value}.
+        For any field with more than one source document, call check_field_consistency
+        with the field_name and a values dict of {source_document: value}.
         List each detected issue as a human-readable string in issues_found.
-        Set recommendation to one of: "complete", "incomplete", or "needs_review".
         """
         ...
 

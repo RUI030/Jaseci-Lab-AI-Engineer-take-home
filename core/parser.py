@@ -13,7 +13,7 @@ from core.models import (
     FieldSchema,
     ValidationIssue,
 )
-from core.tools import check_field_consistency, run_cross_validation, validate_vin
+from core.tools import run_cross_validation
 
 _CONF_WEIGHT: dict[str, int] = {"high": 3, "medium": 2, "low": 1}
 _VIN_PATTERN = r"^[A-Z0-9]{17}$"   # standard 17-char alphanumeric VIN (case-insensitive)
@@ -125,10 +125,7 @@ class ClaimParser:
                 claim.tools_used.append({
                     "tool": "run_cross_validation",
                     "input": {"fields_checked": sorted(fields_to_check.keys())},
-                    "result": {
-                        "recommendation": report.recommendation,
-                        "issues": report.issues_found,
-                    },
+                    "result": {"issues": report.issues_found},
                 })
             except Exception:
                 pass  # LLM audit is best-effort; Python validation continues regardless

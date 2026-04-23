@@ -158,6 +158,6 @@ jupyter notebook demo/doc_parsing.ipynb
 - Confidence-based model fallback (retry low-confidence extractions with a larger model before escalating to human review)
 - Persistent state store (`claim_state.json` → PostgreSQL or Redis)
 - Web UI (replace `Chatbot` with FastAPI + Gradio; `Claim` already serialises to JSON via Pydantic)
-- Jac/byLLM integration (Jaseci ecosystem)
+- Full Jac graph rewrite (replace LangGraph with Jaseci walkers — see `UPGRADE.md` for the plan; cross-validation tool dispatch already uses byLLM)
 - Content-based document type classification: the current approach uses the filename as a hint and asks the VLM to infer doc type from content. A more robust approach would be a dedicated lightweight classifier (fine-tuned BERT or a small VLM) trained on labelled insurance documents, decoupling type detection from field extraction and making it resilient to arbitrary filenames.
 - Fraud risk scoring: customer-supplied data currently receives `source_trust="user_input"` — it informs the claim state but cannot override document-extracted values or substitute for required documents. The natural extension is an explicit fraud-risk layer: cross-reference VINs against a DMV or vehicle history API, flag claims where customer-stated values diverge significantly from all submitted documents, and integrate with external watchlists. The current trust model is intentionally conservative as a first line of defence; a dedicated fraud scorer would make that defence explicit and configurable.

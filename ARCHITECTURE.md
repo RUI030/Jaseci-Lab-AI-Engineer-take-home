@@ -373,18 +373,17 @@ def validate_vin(vin: str) -> dict
 # checks VIN length and character set
 # exposed as a tool to the byLLM ReAct loop in run_cross_validation
 
-def check_field_consistency(field_name: str, values_json: str) -> dict
-# values_json: JSON string mapping source_document to value,
-#   e.g. '{"police_report.pdf": "ABC123", "finance_agreement.pdf": "XYZ789"}'
+def check_field_consistency(field_name: str, values: dict[str, str]) -> dict
+# values: {source_document: unified_value},
+#   e.g. {"police_report.pdf": "ABC123", "finance_agreement.pdf": "XYZ789"}
 # compares values across sources; returns consistent/inconsistent + unique_values list
 # exposed as a tool to the byLLM ReAct loop in run_cross_validation
 
 @dataclass
 class ValidationReport:
     issues_found: list[str]   # human-readable issue descriptions from the LLM
-    recommendation: str       # "complete" | "incomplete" | "needs_review"
 
-@by(_tool_llm)  # byLLM ReAct loop — Gemini 2.5 Flash + [validate_vin, check_field_consistency]
+@by(_tool_llm, tools=[validate_vin, check_field_consistency])
 def run_cross_validation(fields_by_source: dict, field_schemas: list) -> ValidationReport
 # LLM-driven dispatcher: given fields and their per-source values, decides which tools to call.
 # Called by ClaimParser.cross_validate when field_schemas is provided (production path).
@@ -394,7 +393,7 @@ def run_cross_validation(fields_by_source: dict, field_schemas: list) -> Validat
 
 `classify_document` and `run_cross_validation` each append one entry to `Claim.tools_used`:
 `{"tool": "<name>", "input": {...}, "result": {...}}`.
-`run_cross_validation` records the aggregated LLM recommendation and issues list rather than one entry per field.
+`run_cross_validation` records the LLM-selected issues list; routing decisions remain in Python.
 
 ---
 
