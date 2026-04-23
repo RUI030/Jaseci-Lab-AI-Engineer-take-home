@@ -57,9 +57,9 @@ LLMAdapters    (core/llm_adapters.py)— Gemini and Qwen clients behind BaseLLMC
 **LangGraph graph** (`ClaimAgent._build_graph`):
 - Entry → `parse_documents` → `cross_validate`
 - Conditional after `cross_validate`:
-  - `incomplete` + `reply_queue` non-empty → `accept_reply` (pre-loaded `.txt` reply)
-  - `incomplete` + `reply_queue` empty → `generate_message` → `accept_reply`
-  - `complete` or `needs_review` → END
+  - `incomplete` + `reply_queue` non-empty → `accept_reply` (pre-loaded `.txt` reply, skip message)
+  - all other cases → `generate_message` (customer always receives a decision notification)
+- After `generate_message`: `incomplete` → `accept_reply`; `complete` or `needs_review` → END
 - Conditional after reply: if not skipped and under max rounds → `cross_validate` again; else END
 - Routing is deterministic/conditional, not LLM-driven (compliance requirement)
 
@@ -105,5 +105,5 @@ To switch models, change `model_id` in `config/settings.yaml`. `QWEN_API_KEY` an
 
 - **Confidence is immutable**: set at extraction time, never changed. Every value is traceable to its source document.
 - **Duplicate routing is type-aware**: same filename → `incomplete` (user can fix); same content, different filename → `needs_review` (data integrity, requires human review).
-- **`needs_review` means staff ownership**: company staff must act. The agent never sends customer messages for `needs_review` claims.
+- **Customer always gets a decision notification**: every claim status — `complete`, `incomplete`, `needs_review` — triggers a `generate_message` call so the customer is never left without a response. For `needs_review`, the message informs the customer that their claim is under manual review; staff then owns follow-up.
 - **Confirmation-style messages**: for field inconsistencies, the LLM is given our best-guess value (`extracted_fields.unified_value`) and asks the customer to confirm or correct it — not an open "which is right?" question.

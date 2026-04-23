@@ -17,6 +17,7 @@ from core.models import (
     ConversationRound,
     DocRecord,
     FieldSchema,
+    NextAction,
 )
 from core.parser import REQUIRED_DOC_TYPES, ClaimParser
 from core.utils import load_yaml, load_field_schemas
@@ -153,6 +154,7 @@ def node_parse_documents(state: ClaimState) -> ClaimState:
     confidence_rank = {"high": 3, "medium": 2, "low": 1}
     for record in claim.doc_table:
         for field in record.fields:
+            field.source_doc = record.file_name
             existing = claim.extracted_fields.get(field.field_name)
             if existing is None:
                 claim.extracted_fields[field.field_name] = field
@@ -211,7 +213,7 @@ def node_parse_documents(state: ClaimState) -> ClaimState:
 def node_cross_validate(state: ClaimState) -> ClaimState:
     claim = state["claim"]
     parser: ClaimParser = state["parser"]
-    parser.cross_validate(claim)
+    parser.cross_validate(claim, state["field_schemas"])
     claim.status = parser.determine_status(claim)
     return state
 
@@ -241,6 +243,16 @@ def node_generate_message(state: ClaimState) -> ClaimState:
             message=message,
             triggered_by=claim.status,
         )
+    )
+
+    _ACTION_TYPE = {
+        "complete": "finalize",
+        "incomplete": "message_customer",
+        "needs_review": "escalate",
+    }
+    claim.next_action = NextAction(
+        type=_ACTION_TYPE.get(claim.status, "escalate"),
+        message=message,
     )
     return state
 

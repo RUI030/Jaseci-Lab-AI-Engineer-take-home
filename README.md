@@ -148,7 +148,7 @@ jupyter notebook demo/doc_parsing.ipynb
 **Problems encountered:**
 
 - Gemini's `response_schema` does not accept all standard JSON Schema keywords (`$ref`, `additionalProperties`, `title`, etc.) — required a custom schema-flattening pass before every API call.
-- Scanned PDFs with no text layer are silently handled by falling back from `PDFReader` to `ImageReader` when extracted text falls below a configurable threshold (`pdf_text_threshold` in `config/settings.yaml`).
+- PDFs are now passed directly to the VLM without text pre-extraction: Gemini receives the raw file via the Files API (native PDF support); QwenLocal renders each page to an image internally; Qwen API has pages rendered to PNGs by `PDFReader` before upload. This means tables and structured layouts are fully visible to the model rather than being flattened to text.
 - LangGraph state merging behaviour required explicit `reply_skipped` assignment on every branch to avoid stale state leaking across graph iterations.
 - Gemini and Qwen APIs occasionally fail under high load; exponential-backoff retry (configurable in `settings.yaml`) was added to handle transient failures without surfacing them to the claim workflow.
 

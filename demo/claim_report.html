@@ -151,36 +151,32 @@
 <li class="list-group-item list-group-item-warning py-1 small">
               <span class="badge text-bg-warning">warning</span>
               <strong class="ms-1">VIN</strong>:
-              Field &#x27;VIN&#x27; has conflicting values; trusted value &#x27;1HGCM82633A004352&#x27; (confidence-weighted majority). Overruled: adjuster_note.png: 1HGCM82533A00932 (confidence=medium), finance_agreement.png: 1HGCM86263A300432 (confidence=medium).
-            </li>
-<li class="list-group-item list-group-item-warning py-1 small">
-              <span class="badge text-bg-warning">warning</span>
-              <strong class="ms-1">insurance_payout</strong>:
-              Field &#x27;insurance_payout&#x27; has conflicting values; trusted value &#x27;18750.00&#x27; (confidence-weighted majority). Overruled: adjuster_note.png: 18500-19000 (confidence=medium).
+              Field &#x27;VIN&#x27; has conflicting values; trusted value &#x27;1HGCM82633A004352&#x27; (confidence-weighted majority). Overruled: adjuster_note.png: 1HGCM82S33A004352 (confidence=medium).
             </li>
 <li class="list-group-item list-group-item-warning py-1 small">
               <span class="badge text-bg-warning">warning</span>
               <strong class="ms-1">outstanding_loan_balance</strong>:
-              Field &#x27;outstanding_loan_balance&#x27; has conflicting values; trusted value &#x27;22340.55&#x27; (confidence-weighted majority). Overruled: adjuster_note.png: 22000 (confidence=medium).
+              Field &#x27;outstanding_loan_balance&#x27; has conflicting values; trusted value &#x27;22340.55&#x27; (confidence-weighted majority). Overruled: adjuster_note.png: 22000.00 (confidence=medium).
             </li>
 </ul>
 <div class="alert alert-success py-2 small mb-2">
-      <strong>Decision:</strong> <span class="badge text-bg-success">COMPLETE</span> — 3 warning(s) — staff notified
+      <strong>Decision:</strong> <span class="badge text-bg-success">COMPLETE</span> — 2 warning(s) — staff notified
     </div>
 <h6 class="mt-3">Conversation Log (1 round(s))</h6>
-<div class="border-start border-3 border-primary ps-2 mb-2"><small class="text-primary fw-semibold">→ Agent → Customer</small><pre class="bg-light border rounded p-2 small mt-1 mb-0">Thank you for submitting your claim — we’re pleased to let you know it’s now complete. All documents have been reviewed, and your claim is being finalised. You’ll hear from us shortly with next steps. No action is required from you at this time — we’re handling everything behind the scenes.  
+<div class="border-start border-3 border-primary ps-2 mb-2"><small class="text-primary fw-semibold">→ Agent → Customer</small><pre class="bg-light border rounded p-2 small mt-1 mb-0">We&#x27;re pleased to let you know that your claim, CLM-001, is now complete! All the necessary documents and information are in order, and we&#x27;re in the final stages of processing your claim.
 
-Warmly,  
+As a courtesy, we wanted to let you know about a couple of minor details our team is verifying internally. We are currently using &#x27;1HGCM82633A004352&#x27; as the working value for your vehicle&#x27;s VIN, and &#x27;22340.55&#x27; for the outstanding loan balance. You don&#x27;t need to take any action regarding these; our staff will confirm these details.
+
+You will hear from us shortly with the final outcome.
+
 Claims Processing Team</pre></div>
-<h6 class="mt-3">Tools Used (7)</h6>
+<h6 class="mt-3">Tools Used (5)</h6>
 <ul class="list-unstyled small font-monospace mb-0">
 <li class="text-muted">· classify_document({&#x27;file_name&#x27;: &#x27;adjuster_note.png&#x27;}) → inferred_doc_type=unknown, actual_doc_type=unknown, overridden=False</li>
 <li class="text-muted">· classify_document({&#x27;file_name&#x27;: &#x27;finance_agreement.png&#x27;}) → inferred_doc_type=finance_agreement, actual_doc_type=finance_agreement, overridden=False</li>
 <li class="text-muted">· classify_document({&#x27;file_name&#x27;: &#x27;police_report.pdf&#x27;}) → inferred_doc_type=police_report, actual_doc_type=police_report, overridden=False</li>
 <li class="text-muted">· classify_document({&#x27;file_name&#x27;: &#x27;settlement_breakdown.pdf&#x27;}) → inferred_doc_type=settlement_breakdown, actual_doc_type=settlement_breakdown, overridden=False</li>
-<li class="text-muted">· check_field_consistency({&#x27;field_name&#x27;: &#x27;VIN&#x27;, &#x27;values&#x27;: {&#x27;adjuster_note.png&#x27;: &#x27;1HGCM82533A00932&#x27;, &#x27;finance_agreement.png&#x27;: &#x27;1HGCM86263A300432&#x27;, &#x27;police_report.pdf&#x27;: &#x27;1HGCM82633A004352&#x27;, &#x27;settlement_breakdown.pdf&#x27;: &#x27;1HGCM82633A004352&#x27;}}) → consistent=False, unique_values=[&#x27;1HGCM82533A00932&#x27;, &#x27;1HGCM82633A004352&#x27;, &#x27;1HGCM86263A300432&#x27;]</li>
-<li class="text-muted">· check_field_consistency({&#x27;field_name&#x27;: &#x27;insurance_payout&#x27;, &#x27;values&#x27;: {&#x27;adjuster_note.png&#x27;: &#x27;18500-19000&#x27;, &#x27;settlement_breakdown.pdf&#x27;: &#x27;18750.00&#x27;}}) → consistent=False, unique_values=[&#x27;18500-19000&#x27;, &#x27;18750.00&#x27;]</li>
-<li class="text-muted">· check_field_consistency({&#x27;field_name&#x27;: &#x27;outstanding_loan_balance&#x27;, &#x27;values&#x27;: {&#x27;adjuster_note.png&#x27;: &#x27;22000&#x27;, &#x27;finance_agreement.png&#x27;: &#x27;22340.55&#x27;, &#x27;settlement_breakdown.pdf&#x27;: &#x27;22340.55&#x27;}}) → consistent=False, unique_values=[&#x27;22000&#x27;, &#x27;22340.55&#x27;]</li>
+<li class="text-muted">· run_cross_validation({&#x27;fields_checked&#x27;: [&#x27;VIN&#x27;, &#x27;date_of_loss&#x27;, &#x27;outstanding_loan_balance&#x27;]}) → recommendation=needs_review, issues=[&quot;Field &#x27;VIN&#x27; has inconsistent values across source documents: [&#x27;1HGCM82633A004352&#x27;, &#x27;1HGCM82S33A004352&#x27;]&quot;, &quot;Field &#x27;outstanding_loan_balance&#x27; has inconsistent values across source documents: [&#x27;22000.00&#x27;, &#x27;22340.55&#x27;]&quot;]</li>
 </ul>
 </div></div>
 
@@ -190,7 +186,7 @@ Claims Processing Team</pre></div>
         <div>
           <span class="badge text-bg-danger">INCOMPLETE</span>
           <small class="text-muted ms-2">uploaded 2026-04-22</small>
-          <small class="text-muted ms-2">· 2 reply round(s)</small>
+          <small class="text-muted ms-2">· 1 reply round(s)</small>
         </div>
       </div>
       <div class="card-body">
@@ -237,13 +233,13 @@ Claims Processing Team</pre></div>
               <td class="text-success fw-bold">✓</td>
             </tr>
 <tr>
-              <td>date_of_loss <small class="text-muted" title=" | Date format is ambiguous (MM/DD/YYYY vs DD/MM/YYYY), but resolved using US locale (MM/DD/YYYY -&gt; YYYY-MM-DD).">ⓘ</small> <small class="text-muted">(required)</small></td>
+              <td>date_of_loss <small class="text-muted">(required)</small></td>
               <td class="font-monospace">2026-01-28</td>
               <td><span class="badge text-bg-warning">medium</span></td>
               <td class="text-success fw-bold">✓</td>
             </tr>
 <tr>
-              <td>insurance_payout <small class="text-muted" title=" | Scanned image; OCR may have errors, but value is consistent with expected format.">ⓘ</small> <small class="text-muted">(required)</small></td>
+              <td>insurance_payout <small class="text-muted">(required)</small></td>
               <td class="font-monospace">12400.00</td>
               <td><span class="badge text-bg-warning">medium</span></td>
               <td class="text-success fw-bold">✓</td>
@@ -259,13 +255,13 @@ Claims Processing Team</pre></div>
 <li class="list-group-item list-group-item-warning py-1 small">
               <span class="badge text-bg-warning">warning</span>
               <strong class="ms-1">VIN</strong>:
-              Field &#x27;VIN&#x27; has conflicting values; trusted value &#x27;3FADP4BJ7EM207685&#x27; (confidence-weighted majority). Overruled: settlement_breakdown.png: 3P4DY4H72M2E070685 (confidence=medium).
+              Field &#x27;VIN&#x27; has conflicting values; trusted value &#x27;3FADP4BJ7EM207685&#x27; (confidence-weighted majority). Overruled: settlement_breakdown.png: 3FADF4BJ7EM207685 (confidence=medium).
             </li>
 </ul>
 <div class="alert alert-danger py-2 small mb-2">
       <strong>Decision:</strong> <span class="badge text-bg-danger">INCOMPLETE</span> — Missing: <strong>police_report</strong> &nbsp;·&nbsp; 1 warning(s) — staff notified
     </div>
-<h6 class="mt-3">Conversation Log (4 round(s))</h6>
+<h6 class="mt-3">Conversation Log (2 round(s))</h6>
 <div class="border-start border-3 border-success ps-2 mb-2"><small class="text-success fw-semibold">← Customer → Agent</small><pre class="bg-white border rounded p-2 small mt-1 mb-0">From: james.kowalski84@gmail.com
 To: claims@example-insurance.com
 Date: February 5, 2026 9:14 AM
@@ -293,29 +289,26 @@ Thanks,
 James Kowalski
 (313) 555-0294
 </pre></div>
-<div class="border-start border-3 border-primary ps-2 mb-2"><small class="text-primary fw-semibold">→ Agent → Customer</small><pre class="bg-light border rounded p-2 small mt-1 mb-0">Thank you for your patience and for confirming the police report will be available next weekend. We’re still waiting for that document to move forward, but no action is needed from you in the meantime.
+<div class="border-start border-3 border-primary ps-2 mb-2"><small class="text-primary fw-semibold">→ Agent → Customer</small><pre class="bg-light border rounded p-2 small mt-1 mb-0">Thank you for your recent email regarding claim CLM-002, and for providing us with additional details about your accident and the police report. We appreciate you taking the time to share this information despite your personal difficulties.
 
-We’ve already recorded the details you’ve shared — including the accident date, location, officer’s name (Maria Santos, badge #2281), and your VIN (3FADP4BJ7EM207685) — and are using that as our current working value. Our team will verify it once we receive the police report.
+Based on the information you&#x27;ve provided, we have a few items to finalize your claim:
 
-In the meantime, please plan to send the police report by next weekend so we can continue processing your claim. Once we have it, we’ll review everything and let you know next steps.
+1.  **Police Report:** We appreciate you letting us know you have a copy of the police report. To help us process your claim, please submit the police report when you are able. We have noted the officer&#x27;s details you provided: Maria Santos, badge #2281, from the DPD.
+2.  **Gap Insurance Documentation:** You also asked if documentation is required for your gap insurance. If you have any documentation from your dealer regarding your gap insurance, please provide it.
 
-Thanks again for your cooperation — we’re here to help.
+Additionally, for your awareness, we are currently using VIN 3FADP4BJ7EM207685 for your 2019 Ford Focus. Our team will verify this internally, so no action is needed from you unless you notice an error.
+
+We appreciate your cooperation and look forward to receiving the requested documents.
+
+Sincerely,
 
 Claims Processing Team</pre></div>
-<div class="border-start border-3 border-success ps-2 mb-2"><small class="text-success fw-semibold">← Customer → Agent</small><pre class="bg-white border rounded p-2 small mt-1 mb-0">correct</pre></div>
-<div class="border-start border-3 border-primary ps-2 mb-2"><small class="text-primary fw-semibold">→ Agent → Customer</small><pre class="bg-light border rounded p-2 small mt-1 mb-0">Thank you for confirming the police report details — we’ve recorded that the report was filed at your parents’ house in Toledo, with Officer Maria Santos (Badge #2281). We’re still waiting for the official police report to proceed, and we’ll review it as soon as it’s received.
-
-We’ve also noted a minor discrepancy in the VIN field — we’re currently using “3FADP4BJ7EM207685” as our working value, and our team will verify this. No action is needed from you unless you notice anything incorrect.
-
-We’re expecting you to submit the police report by next weekend, and we’ll keep you updated once it’s received.
-
-Thanks again for your patience — we’re here to help.  
-Claims Processing Team</pre></div>
-<h6 class="mt-3">Tools Used (3)</h6>
+<h6 class="mt-3">Tools Used (4)</h6>
 <ul class="list-unstyled small font-monospace mb-0">
 <li class="text-muted">· classify_document({&#x27;file_name&#x27;: &#x27;finance_agreement.pdf&#x27;}) → inferred_doc_type=finance_agreement, actual_doc_type=finance_agreement, overridden=False</li>
 <li class="text-muted">· classify_document({&#x27;file_name&#x27;: &#x27;settlement_breakdown.png&#x27;}) → inferred_doc_type=settlement_breakdown, actual_doc_type=settlement_breakdown, overridden=False</li>
-<li class="text-muted">· check_field_consistency({&#x27;field_name&#x27;: &#x27;VIN&#x27;, &#x27;values&#x27;: {&#x27;finance_agreement.pdf&#x27;: &#x27;3FADP4BJ7EM207685&#x27;, &#x27;settlement_breakdown.png&#x27;: &#x27;3P4DY4H72M2E070685&#x27;}}) → consistent=False, unique_values=[&#x27;3FADP4BJ7EM207685&#x27;, &#x27;3P4DY4H72M2E070685&#x27;]</li>
+<li class="text-muted">· run_cross_validation({&#x27;fields_checked&#x27;: [&#x27;VIN&#x27;, &#x27;outstanding_loan_balance&#x27;]}) → recommendation=needs_review, issues=[&quot;Field &#x27;VIN&#x27; has inconsistent values across source documents: &#x27;3FADP4BJ7EM207685&#x27; (finance_agreement.pdf), &#x27;3FADF4BJ7EM207685&#x27; (settlement_breakdown.png).&quot;]</li>
+<li class="text-muted">· run_cross_validation({&#x27;fields_checked&#x27;: [&#x27;VIN&#x27;, &#x27;outstanding_loan_balance&#x27;]}) → recommendation=needs_review, issues=[&quot;VIN field is inconsistent across source documents. Unique values found: [&#x27;3FADF4BJ7EM207685&#x27;, &#x27;3FADP4BJ7EM207685&#x27;].&quot;]</li>
 </ul>
 </div></div>
 
@@ -399,7 +392,7 @@ Claims Processing Team</pre></div>
 <li class="list-group-item list-group-item-warning py-1 small">
               <span class="badge text-bg-warning">warning</span>
               <strong class="ms-1">VIN</strong>:
-              Field &#x27;VIN&#x27; has conflicting values; trusted value &#x27;2T1BURHE5JC034127&#x27; (confidence-weighted majority). Overruled: finance_agreement.pdf: 2T1BURHE5JC034182 (confidence=high), police_report.png: 2Z1JHUBR85C034127 (confidence=medium).
+              Field &#x27;VIN&#x27; has conflicting values; trusted value &#x27;2T1BURHE5JC034127&#x27; (confidence-weighted majority). Overruled: finance_agreement.pdf: 2T1BURHE5JC034182 (confidence=high).
             </li>
 <li class="list-group-item list-group-item-warning py-1 small">
               <span class="badge text-bg-warning">warning</span>
@@ -411,19 +404,20 @@ Claims Processing Team</pre></div>
       <strong>Decision:</strong> <span class="badge text-bg-success">COMPLETE</span> — 3 warning(s) — staff notified
     </div>
 <h6 class="mt-3">Conversation Log (1 round(s))</h6>
-<div class="border-start border-3 border-primary ps-2 mb-2"><small class="text-primary fw-semibold">→ Agent → Customer</small><pre class="bg-light border rounded p-2 small mt-1 mb-0">Thank you for submitting your claim — we’re pleased to inform you that your claim (CLM-003) has been completed. All documents have been reviewed and are in order. Your claim is now being finalised, and you’ll hear from us shortly with next steps.
+<div class="border-start border-3 border-primary ps-2 mb-2"><small class="text-primary fw-semibold">→ Agent → Customer</small><pre class="bg-light border rounded p-2 small mt-1 mb-0">We&#x27;re pleased to inform you that your claim, CLM-003, is now complete! All necessary documents and information, including your finance agreement, police report, and settlement breakdown, are in order.
 
-No action is required from you at this time — we’ve handled any minor discrepancies internally, and everything is ready to close. Thank you for your patience and cooperation.
+Your claim is now being finalised. As part of our final internal checks, our team is verifying a minor detail regarding the VIN, for which we are currently using 2T1BURHE5JC034182, and the insurance payout amount, which we have at 24100.00. These are internal verifications, and no action is required from you.
+
+You will hear from us shortly regarding the final steps.
 
 Claims Processing Team</pre></div>
-<h6 class="mt-3">Tools Used (6)</h6>
+<h6 class="mt-3">Tools Used (5)</h6>
 <ul class="list-unstyled small font-monospace mb-0">
 <li class="text-muted">· classify_document({&#x27;file_name&#x27;: &#x27;finance_agreement.pdf&#x27;}) → inferred_doc_type=finance_agreement, actual_doc_type=finance_agreement, overridden=False</li>
 <li class="text-muted">· classify_document({&#x27;file_name&#x27;: &#x27;police_report.png&#x27;}) → inferred_doc_type=police_report, actual_doc_type=police_report, overridden=False</li>
 <li class="text-muted">· classify_document({&#x27;file_name&#x27;: &#x27;settlement_breakdown.pdf&#x27;}) → inferred_doc_type=settlement_breakdown, actual_doc_type=settlement_breakdown, overridden=False</li>
 <li class="text-muted">· classify_document({&#x27;file_name&#x27;: &#x27;settlement_breakdown_v2.pdf&#x27;}) → inferred_doc_type=settlement_breakdown, actual_doc_type=settlement_breakdown, overridden=False</li>
-<li class="text-muted">· check_field_consistency({&#x27;field_name&#x27;: &#x27;VIN&#x27;, &#x27;values&#x27;: {&#x27;finance_agreement.pdf&#x27;: &#x27;2T1BURHE5JC034182&#x27;, &#x27;police_report.png&#x27;: &#x27;2Z1JHUBR85C034127&#x27;, &#x27;settlement_breakdown.pdf&#x27;: &#x27;2T1BURHE5JC034127&#x27;, &#x27;settlement_breakdown_v2.pdf&#x27;: &#x27;2T1BURHE5JC034127&#x27;}}) → consistent=False, unique_values=[&#x27;2T1BURHE5JC034127&#x27;, &#x27;2T1BURHE5JC034182&#x27;, &#x27;2Z1JHUBR85C034127&#x27;]</li>
-<li class="text-muted">· check_field_consistency({&#x27;field_name&#x27;: &#x27;insurance_payout&#x27;, &#x27;values&#x27;: {&#x27;settlement_breakdown.pdf&#x27;: &#x27;24100.00&#x27;, &#x27;settlement_breakdown_v2.pdf&#x27;: &#x27;23800.00&#x27;}}) → consistent=False, unique_values=[&#x27;23800.00&#x27;, &#x27;24100.00&#x27;]</li>
+<li class="text-muted">· run_cross_validation({&#x27;fields_checked&#x27;: [&#x27;VIN&#x27;, &#x27;date_of_loss&#x27;, &#x27;insurance_payout&#x27;, &#x27;outstanding_loan_balance&#x27;]}) → recommendation=needs_review, issues=[&quot;Field &#x27;VIN&#x27; has inconsistent values across sources. Unique values: [&#x27;2T1BURHE5JC034127&#x27;, &#x27;2T1BURHE5JC034182&#x27;]&quot;, &quot;Field &#x27;insurance_payout&#x27; has inconsistent values across sources. Unique values: [&#x27;23800.00&#x27;, &#x27;24100.00&#x27;]&quot;]</li>
 </ul>
 </div></div>
 
@@ -474,22 +468,22 @@ Claims Processing Team</pre></div>
             <th>Field</th><th>Value</th><th>Confidence</th><th>Valid</th>
           </tr></thead><tbody>
 <tr>
-              <td>VIN <small class="text-muted" title="VIN must be exactly 17 alphanumeric characters. &#x27;2022 Tesla Model 3&#x27; is not a valid VIN. Value &#x27;2022TESLAMODEL3&#x27; does not match expected format (^[A-Z0-9]{17}$).">ⓘ</small> <small class="text-muted">(required)</small></td>
-              <td class="font-monospace">2022TESLAMODEL3</td>
+              <td>VIN <small class="text-muted" title="VIN is not 17 alphanumeric characters. Value &#x27;5YJ3E1EA7K&#x27; does not match expected format (^[A-Z0-9]{17}$).">ⓘ</small> <small class="text-muted">(required)</small></td>
+              <td class="font-monospace">5YJ3E1EA7K</td>
               <td><span class="badge text-bg-warning">medium</span></td>
               <td class="text-danger fw-bold">✗</td>
             </tr>
 <tr>
-              <td>date_of_loss <small class="text-muted" title=" | Date format is MM/DD/YYYY; normalized to ISO 8601. Confirmed by document text.">ⓘ</small> <small class="text-muted">(required)</small></td>
-              <td class="font-monospace">2025-12-19</td>
+              <td>date_of_loss <small class="text-muted">(required)</small></td>
+              <td class="font-monospace">2023-12-19</td>
               <td><span class="badge text-bg-warning">medium</span></td>
               <td class="text-success fw-bold">✓</td>
             </tr>
 <tr>
-              <td>insurance_payout <small class="text-muted">(required)</small></td>
-              <td class="font-monospace">432.18</td>
-              <td><span class="badge text-bg-warning">medium</span></td>
-              <td class="text-success fw-bold">✓</td>
+              <td>insurance_payout <small class="text-muted" title=" | Field not found.">ⓘ</small> <small class="text-muted">(required)</small></td>
+              <td class="font-monospace"><em class="text-muted">not found</em></td>
+              <td><span class="badge text-bg-danger">low</span></td>
+              <td class="text-danger fw-bold">✗</td>
             </tr>
 <tr>
               <td>outstanding_loan_balance <small class="text-muted">(optional)</small></td>
@@ -498,40 +492,32 @@ Claims Processing Team</pre></div>
               <td class="text-success fw-bold">✓</td>
             </tr>
 </tbody></table>
-<h6>Validation Issues</h6><ul class="list-group list-group-flush mb-3">
-<li class="list-group-item list-group-item-danger py-1 small">
-              <span class="badge text-bg-danger">blocking</span>
-              <strong class="ms-1">VIN</strong>:
-              Field &#x27;VIN&#x27;: no source contains a valid 17-character alphanumeric VIN. Values: &#x27;finance_agreement.png&#x27;: &#x27;2022TESLAMODEL3&#x27;, &#x27;police_report.png&#x27;: &#x27;SYVJ318A7R&#x27;, &#x27;settlement_breakdown.png&#x27;: &#x27;ATF3447821&#x27;.
-            </li>
-</ul>
 <div class="alert alert-warning py-2 small mb-2">
-      <strong>Decision:</strong> <span class="badge text-bg-warning">NEEDS_REVIEW</span> — 1 blocking issue
+      <strong>Decision:</strong> <span class="badge text-bg-warning">NEEDS_REVIEW</span> — No issues detected.
     </div>
 <h6 class="mt-3">Conversation Log (1 round(s))</h6>
-<div class="border-start border-3 border-primary ps-2 mb-2"><small class="text-primary fw-semibold">→ Agent → Customer</small><pre class="bg-light border rounded p-2 small mt-1 mb-0">Thank you for submitting your claim. We’ve received all your documents and are currently reviewing them.
+<div class="border-start border-3 border-primary ps-2 mb-2"><small class="text-primary fw-semibold">→ Agent → Customer</small><pre class="bg-light border rounded p-2 small mt-1 mb-0">Dear Customer,
 
-Here’s what we noticed that requires our human reviewers to double-check:
+Thank you for submitting the documents for your claim, CLM-004. We have received your finance_agreement, police_report, settlement_breakdown, and tow_receipt.
 
-1. The VIN number in your documents doesn’t match across all files. We’re currently using “2022TESLAMODEL3” as our best guess, but we need to confirm this is correct. If you have a clearer copy of any document, resubmitting it may help us resolve this faster.
+Your claim currently requires a human review before we can proceed. This is because:
 
-Please note that this may take longer than usual — typically 3–5 business days — as a human reviewer will need to verify the details.
+1.  We were unable to determine the exact insurance payout amount from the information provided. A member of our team will carefully review your claim to verify this detail.
 
-No action is required from you at this time, but if you’d like to help speed things up, feel free to resubmit any documents with clearer information.
+Please be aware that this human review process may take a little longer than our standard processing time, which is typically 3–5 business days. We appreciate your patience as we work to ensure everything is accurate.
 
-Thanks for your patience — we’re here to help.
+We will contact you again once the review is complete.
+
+Sincerely,
 
 Claims Processing Team</pre></div>
-<h6 class="mt-3">Tools Used (8)</h6>
+<h6 class="mt-3">Tools Used (5)</h6>
 <ul class="list-unstyled small font-monospace mb-0">
 <li class="text-muted">· classify_document({&#x27;file_name&#x27;: &#x27;finance_agreement.png&#x27;}) → inferred_doc_type=finance_agreement, actual_doc_type=finance_agreement, overridden=False</li>
 <li class="text-muted">· classify_document({&#x27;file_name&#x27;: &#x27;police_report.png&#x27;}) → inferred_doc_type=police_report, actual_doc_type=police_report, overridden=False</li>
 <li class="text-muted">· classify_document({&#x27;file_name&#x27;: &#x27;settlement_breakdown.png&#x27;}) → inferred_doc_type=settlement_breakdown, actual_doc_type=settlement_breakdown, overridden=False</li>
 <li class="text-muted">· classify_document({&#x27;file_name&#x27;: &#x27;tow_receipt.png&#x27;}) → inferred_doc_type=unknown, actual_doc_type=unknown, overridden=False</li>
-<li class="text-muted">· check_field_consistency({&#x27;field_name&#x27;: &#x27;VIN&#x27;, &#x27;values&#x27;: {&#x27;finance_agreement.png&#x27;: &#x27;2022TESLAMODEL3&#x27;, &#x27;police_report.png&#x27;: &#x27;SYVJ318A7R&#x27;, &#x27;settlement_breakdown.png&#x27;: &#x27;ATF3447821&#x27;}}) → consistent=False, unique_values=[&#x27;2022TESLAMODEL3&#x27;, &#x27;ATF3447821&#x27;, &#x27;SYVJ318A7R&#x27;]</li>
-<li class="text-muted">· validate_vin({&#x27;vin&#x27;: &#x27;ATF3447821&#x27;}) → valid=False, reason=&#x27;ATF3447821&#x27; does not match the 17-character alphanumeric VIN format</li>
-<li class="text-muted">· validate_vin({&#x27;vin&#x27;: &#x27;SYVJ318A7R&#x27;}) → valid=False, reason=&#x27;SYVJ318A7R&#x27; does not match the 17-character alphanumeric VIN format</li>
-<li class="text-muted">· validate_vin({&#x27;vin&#x27;: &#x27;2022TESLAMODEL3&#x27;}) → valid=False, reason=&#x27;2022TESLAMODEL3&#x27; does not match the 17-character alphanumeric VIN format</li>
+<li class="text-muted">· run_cross_validation({&#x27;fields_checked&#x27;: [&#x27;VIN&#x27;, &#x27;date_of_loss&#x27;, &#x27;outstanding_loan_balance&#x27;]}) → recommendation=needs_review, issues=[&quot;VIN &#x27;5YJ3E1EA7K&#x27; does not match the 17-character alphanumeric VIN format.&quot;]</li>
 </ul>
 </div></div>
 
@@ -541,7 +527,7 @@ Claims Processing Team</pre></div>
         <div>
           <span class="badge text-bg-danger">INCOMPLETE</span>
           <small class="text-muted ms-2">uploaded 2026-04-22</small>
-          <small class="text-muted ms-2">· 2 reply round(s)</small>
+          <small class="text-muted ms-2">· 1 reply round(s)</small>
         </div>
       </div>
       <div class="card-body">
@@ -610,7 +596,7 @@ Claims Processing Team</pre></div>
 <li class="list-group-item list-group-item-warning py-1 small">
               <span class="badge text-bg-warning">warning</span>
               <strong class="ms-1">VIN</strong>:
-              Field &#x27;VIN&#x27; has conflicting values; trusted value &#x27;1N4AL3AP8JC231504&#x27; (confidence-weighted majority). Overruled: police_report.png: 1N4A3AB88C231504 (confidence=medium).
+              Field &#x27;VIN&#x27; has conflicting values; trusted value &#x27;1N4AL3AP8JC231504&#x27; (confidence-weighted majority). Overruled: police_report.png: 1N4AL3AP8JC231304 (confidence=medium).
             </li>
 <li class="list-group-item list-group-item-warning py-1 small">
               <span class="badge text-bg-warning">warning</span>
@@ -621,7 +607,7 @@ Claims Processing Team</pre></div>
 <div class="alert alert-danger py-2 small mb-2">
       <strong>Decision:</strong> <span class="badge text-bg-danger">INCOMPLETE</span> — Missing: <strong>finance_agreement</strong> &nbsp;·&nbsp; 2 warning(s) — staff notified
     </div>
-<h6 class="mt-3">Conversation Log (4 round(s))</h6>
+<h6 class="mt-3">Conversation Log (2 round(s))</h6>
 <div class="border-start border-3 border-success ps-2 mb-2"><small class="text-success fw-semibold">← Customer → Agent</small><pre class="bg-white border rounded p-2 small mt-1 mb-0">From: elena.v.vasquez@outlook.com
 To: claims@example-insurance.com
 Date: April 2, 2026 3:47 PM
@@ -651,29 +637,30 @@ Best regards,
 Elena Vasquez
 (248) 555-0831
 </pre></div>
-<div class="border-start border-3 border-primary ps-2 mb-2"><small class="text-primary fw-semibold">→ Agent → Customer</small><pre class="bg-light border rounded p-2 small mt-1 mb-0">Thank you for your patience and for providing the details about your claim. We’ve received your lender information and updated the accident date to March 22, as you’ve confirmed.
+<div class="border-start border-3 border-primary ps-2 mb-2"><small class="text-primary fw-semibold">→ Agent → Customer</small><pre class="bg-light border rounded p-2 small mt-1 mb-0">Hi Elena,
 
-We’re currently working on your claim and have a best-guess value for your VIN — “1N4AL3AP8JC231504” — and the date of loss — March 28, 2026 — which our team is verifying. We’ll update your records once confirmed.
+Thank you for reaching out regarding your claim, CLM-005. We appreciate you providing details about your Bank of America Auto loan (Account #: 8841-5567-2203), including your monthly payment of $487.33 and estimated balance of ~$35,000. We also noted your correction that the accident occurred on March 22nd, and your offer to authorize us to contact Bank of America directly for the payoff amount.
 
-We’re still waiting for your finance agreement, which we need to process your claim fully. In the meantime, we’re ready to proceed with your lender once you authorize them to provide the payoff amount.
+To help us finalize your claim, we need your assistance with one item:
 
-No action is required from you right now — just let us know if you spot anything that doesn’t look right with the values we’ve used.
+1.  We understand you&#x27;re having trouble locating your finance agreement, which is a required document. You offered to authorize us to contact Bank of America Auto directly for the payoff amount. To proceed with this, please confirm your authorization for us to contact Bank of America Auto (Account #: 8841-5567-2203) on your behalf.
 
-Claims Processing Team</pre></div>
-<div class="border-start border-3 border-success ps-2 mb-2"><small class="text-success fw-semibold">← Customer → Agent</small><pre class="bg-white border rounded p-2 small mt-1 mb-0">vin correct</pre></div>
-<div class="border-start border-3 border-primary ps-2 mb-2"><small class="text-primary fw-semibold">→ Agent → Customer</small><pre class="bg-light border rounded p-2 small mt-1 mb-0">Thank you for your patience and for confirming the VIN and accident date. We’re currently using “1N4AL3AP8JC231504” as the VIN and “2026-03-28” as the loss date — both are being verified by our team. 
+Additionally, we wanted to make you aware of a couple of minor details our team is currently verifying internally. No action is needed from you regarding these unless you spot something incorrect:
 
-We’re waiting for your finance agreement, which you suspect was misplaced during towing. Once you authorize Bank of America to provide the payoff amount, we’ll proceed. No action is needed from you until then.
+*   We currently have your vehicle&#x27;s VIN as 1N4AL3AP8JC231504.
+*   While we&#x27;ve noted your correction that the accident occurred on March 22nd, our records currently show March 28th, 2026. Our team is verifying this internally.
 
-You can expect a follow-up once we’ve received the finance agreement — we’re ready to move forward as soon as it’s in hand. 
+Once we receive your confirmation regarding the authorization, we can move forward with your claim. Please don&#x27;t hesitate to reply if you have any questions.
+
+Sincerely,
 
 Claims Processing Team</pre></div>
 <h6 class="mt-3">Tools Used (4)</h6>
 <ul class="list-unstyled small font-monospace mb-0">
 <li class="text-muted">· classify_document({&#x27;file_name&#x27;: &#x27;police_report.png&#x27;}) → inferred_doc_type=police_report, actual_doc_type=police_report, overridden=False</li>
 <li class="text-muted">· classify_document({&#x27;file_name&#x27;: &#x27;settlement_breakdown.pdf&#x27;}) → inferred_doc_type=settlement_breakdown, actual_doc_type=settlement_breakdown, overridden=False</li>
-<li class="text-muted">· check_field_consistency({&#x27;field_name&#x27;: &#x27;VIN&#x27;, &#x27;values&#x27;: {&#x27;police_report.png&#x27;: &#x27;1N4A3AB88C231504&#x27;, &#x27;settlement_breakdown.pdf&#x27;: &#x27;1N4AL3AP8JC231504&#x27;}}) → consistent=False, unique_values=[&#x27;1N4A3AB88C231504&#x27;, &#x27;1N4AL3AP8JC231504&#x27;]</li>
-<li class="text-muted">· check_field_consistency({&#x27;field_name&#x27;: &#x27;date_of_loss&#x27;, &#x27;values&#x27;: {&#x27;police_report.png&#x27;: &#x27;2026-03-22&#x27;, &#x27;settlement_breakdown.pdf&#x27;: &#x27;2026-03-28&#x27;}}) → consistent=False, unique_values=[&#x27;2026-03-22&#x27;, &#x27;2026-03-28&#x27;]</li>
+<li class="text-muted">· run_cross_validation({&#x27;fields_checked&#x27;: [&#x27;VIN&#x27;, &#x27;date_of_loss&#x27;]}) → recommendation=needs_review, issues=[&quot;Field &#x27;VIN&#x27; has inconsistent values across sources: &#x27;1N4AL3AP8JC231304&#x27; (police_report.png), &#x27;1N4AL3AP8JC231504&#x27; (settlement_breakdown.pdf)&quot;, &quot;Field &#x27;date_of_loss&#x27; has inconsistent values across sources: &#x27;2026-03-22&#x27; (police_report.png), &#x27;2026-03-28&#x27; (settlement_breakdown.pdf)&quot;]</li>
+<li class="text-muted">· run_cross_validation({&#x27;fields_checked&#x27;: [&#x27;VIN&#x27;, &#x27;date_of_loss&#x27;]}) → recommendation=needs_review, issues=[&quot;VIN values are inconsistent across documents: police_report.png=&#x27;1N4AL3AP8JC231304&#x27;, settlement_breakdown.pdf=&#x27;1N4AL3AP8JC231504&#x27;.&quot;, &quot;date_of_loss values are inconsistent across documents: police_report.png=&#x27;2026-03-22&#x27;, settlement_breakdown.pdf=&#x27;2026-03-28&#x27;.&quot;]</li>
 </ul>
 </div></div>
 

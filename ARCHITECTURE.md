@@ -267,7 +267,7 @@ Customer replies **cannot resolve inconsistencies** — even a matching reply do
 
 **Dispatch:** `get_doc_reader(file_path)` selects the appropriate reader by file extension.
 
-**PDF fallback:** `PDFReader` checks extracted text volume after initial parsing. If the result falls below `pdf_text_threshold` (in `config/settings.yaml`), it falls back to `ImageReader` and logs the fallback in `DocRecord.status_reason`.
+**PDF reading strategy:** `PDFReader` checks `client.supports_native_pdf()` to decide how to send the file. Gemini uploads the PDF directly via the Files API (native support — tables and layout fully visible). `QwenLocalAdapter` renders pages to images internally. For `QwenAdapter` (cloud API, no native PDF), `PDFReader` renders each page to a PNG temp file and passes them all, then cleans up.
 
 #### ADT
 
@@ -289,7 +289,7 @@ class BaseDocReader(ABC):
     # delegates to client.generate(); raises ParseFailedError on failure
 
 class PDFReader(BaseDocReader): ...
-    # extracts text via pdfplumber; falls back to ImageReader if text is sparse
+    # passes PDF directly to VLM if client.supports_native_pdf(); otherwise renders pages to PNGs
 
 class ImageReader(BaseDocReader): ...
     # preprocesses (deskew) before sending to VLM
@@ -299,10 +299,10 @@ class TextReader(BaseDocReader): ...
     # wraps content in XML isolation tags before sending to VLM
 
 def get_doc_reader(file_path: str) -> BaseDocReader:
-    # .pdf        → PDFReader (with ImageReader fallback)
+    # .pdf              → PDFReader (native PDF or page-image rendering per adapter)
     # .png / .jpg / .jpeg → ImageReader
-    # .txt        → TextReader
-    # other       → raises UnsupportedFileTypeError
+    # .txt              → TextReader
+    # other             → raises UnsupportedFileTypeError
 ```
 
 ---
@@ -396,6 +396,7 @@ class Claim(BaseModel):
     reply_count: int
     tools_used: list[dict]
     # each entry: {"tool": "<name>", "input": {...}, "result": {...}}
+    next_action: NextAction | None               # set by node_generate_message after each outbound message
 ```
 
 ---
@@ -417,6 +418,7 @@ class ExtractedField(BaseModel):
     field_name: str
     field_role: Literal["required", "optional", "discovered"]
     source_trust: Literal["document", "user_input"]
+    source_doc: str | None          # file_name of the winning source document
     origin_value: str | None        # raw value from VLM, kept for audit
     unified_value: str | None       # normalised value, used for validation
     data_type: str
@@ -544,7 +546,7 @@ All unrecoverable errors result in `needs_review` status rather than silent fail
 | Transient API error (rate-limit, 5xx) | Exponential backoff, up to `retry.max_attempts` attempts (`llm_adapters._with_retry`). On final failure → `ParseFailedError` → `parse_status = "parse_failed"`, claim → `needs_review` |
 | VLM returns malformed JSON | `ParseFailedError` raised immediately (not retried) → `parse_status = "parse_failed"`, claim → `needs_review` |
 | File corrupted or unreadable | `parse_status = "parse_failed"`, claim → `needs_review`, logged in `status_reason` |
-| PDF with no text layer | `PDFReader` detects low text volume (below `pdf_text_threshold`) and falls back to `ImageReader` |
+| PDF (any type) | `PDFReader` sends the file visually — native upload for Gemini, page-image rendering for Qwen; tables and layout are always visible to the VLM |
 | Unknown doc type (non-required) | `doc_type = "unknown"`, logged in `Claim.tools_used`; does not affect routing if required docs are present |
 | Unsupported `model_id` | `UnsupportedModelError` raised at `LLMClientFactory.get_client()`, before any processing begins |
 
@@ -635,13 +637,15 @@ claims/
 | `config/field_schema.json` | Field definitions, validation rules, unify instructions |
 | `config/workflow.yaml` | `max_reply_rounds` and other routing parameters |
 | `config/messages.yaml` | `customer_message_guideline` (LLM prompt for outbound messages), `conversation_summary_guideline` (LLM prompt for summary updates), `customer_email` + `issue_fragments` (template fallback), `priority_reason` strings |
-| `config/settings.yaml` | `model_id`, model parameters, `pdf_text_threshold`, `retry` block |
+| `config/settings.yaml` | `model_id`, model parameters, `retry` block |
 
 ---
 
 ## Key Design Decisions
 
-**Conditional dispatch, not hardcoded pipeline.** LangGraph conditional edges decide which node to invoke based on `ClaimState`. Deterministic routing is justified in this domain — insurance claim processing has well-defined states and compliance requirements that make unpredictable LLM-driven tool selection inappropriate.
+**Conditional dispatch, not hardcoded pipeline.** LangGraph conditional edges decide which node to invoke based on `ClaimState`. Deterministic routing is justified in this domain — insurance claim processing has well-defined states and compliance requirements that make unpredictable LLM-driven tool selection a liability.
+
+**Tool invocation is Python-conditional, not LLM-driven.** `validate_vin` is called only when a VIN field has conflicting values across documents. `check_field_consistency` is called only for fields that appear in more than one source. `classify_document` is called once per file after VLM extraction. The conditions are implemented in Python (`ClaimParser.cross_validate`, `node_parse_documents`) rather than by an LLM choosing tools at runtime. `UPGRADE.md` documents a byLLM migration path that would convert these to true runtime LLM-driven tool selection.
 
 **Confidence is immutable after extraction.** Assigned by `DocReader` once and never modified. Every value is traceable to its source document and extraction method.
 

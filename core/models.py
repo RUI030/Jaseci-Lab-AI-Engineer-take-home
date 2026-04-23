@@ -22,6 +22,7 @@ class ExtractedField(BaseModel):
     field_name: str
     field_role: Literal["required", "optional", "discovered"]
     source_trust: Literal["document", "user_input"]
+    source_doc: str | None = None          # file_name of the document this field was taken from
     origin_value: str | None = None
     unified_value: str | None = None
     data_type: str
@@ -75,7 +76,12 @@ class ConversationRound(BaseModel):
     compare_results: dict[str, Literal["consistent", "inconsistent"]] | None = None
 
 
-# --- Claim & Priority Models ---
+# --- Action & Priority Models ---
+
+class NextAction(BaseModel):
+    type: Literal["finalize", "message_customer", "escalate"]
+    message: str
+
 
 class Claim(BaseModel):
     claim_id: str
@@ -89,6 +95,7 @@ class Claim(BaseModel):
     conversation_summary: str = ""
     tools_used: list[dict] = Field(default_factory=list)
     # each entry: {"tool": "<name>", "input": {...}, "result": {...}}
+    next_action: NextAction | None = None
 
 
 class PriorityRecord(BaseModel):
