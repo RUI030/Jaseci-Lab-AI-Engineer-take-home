@@ -2,8 +2,10 @@
 
 An AI agent that processes insurance claims — reading documents, extracting key fields, validating consistency, and deciding what to do next.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for system design documentation.
-
+See 
+* [ARCHITECTURE.md](ARCHITECTURE.md) for system design documentation.
+* [Slides](https://github.com/RUI030/Jaseci-Lab-AI-Engineer-take-home/blob/main/demo/Slide_TechDeepDive.pdf) for interview.
+* [Download for visual Demo](https://github.com/RUI030/Jaseci-Lab-AI-Engineer-take-home/blob/main/demo/claim_report.html)
 ---
 
 ## Setup
