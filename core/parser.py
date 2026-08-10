@@ -13,7 +13,7 @@ from core.models import (
     FieldSchema,
     ValidationIssue,
 )
-from core.tools import check_field_consistency, validate_vin
+from core.tools import run_cross_validation
 
 _CONF_WEIGHT: dict[str, int] = {"high": 3, "medium": 2, "low": 1}
 _VIN_PATTERN = r"^[A-Z0-9]{17}$"   # standard 17-char alphanumeric VIN (case-insensitive)
@@ -66,11 +66,19 @@ class ClaimParser:
         }
         return [t for t in REQUIRED_DOC_TYPES if t not in present]
 
-    def cross_validate(self, claim: Claim) -> list[ValidationIssue]:
+    def cross_validate(
+        self,
+        claim: Claim,
+        field_schemas: list[FieldSchema] | None = None,
+    ) -> list[ValidationIssue]:
         """Compare unified_value of each field across all document sources.
 
         Only considers fields where source_trust == 'document'. Never modifies
         confidence values. Returns only the new ValidationIssues added this round.
+
+        Tool dispatch is LLM-driven via run_cross_validation (byLLM ReAct loop).
+        The LLM decides which tools to call and populates claim.tools_used.
+        Python validation logic below generates structured ValidationIssue objects.
 
         Algorithm (per field):
           1. Weighted vote: high=3, medium=2, low=1. If the winning value holds
@@ -96,6 +104,32 @@ class ClaimParser:
                     field.data_type,
                 )
 
+        # LLM-driven tool dispatch: let the LLM decide which tools to call, then
+        # record the result in tools_used.  Only pass fields that need checking —
+        # VIN fields (format validation) and multi-source fields (consistency check).
+        # field_schemas=None means the caller is a unit test; skip the LLM call.
+        fields_to_check = {
+            fname: {doc: v for doc, (v, _, _) in src.items()}
+            for fname, src in field_data.items()
+            if "vin" in fname.lower() or len(src) > 1
+        }
+        if fields_to_check and field_schemas is not None:
+            try:
+                report = run_cross_validation(
+                    fields_by_source=fields_to_check,
+                    field_schemas=[
+                        {"field_name": s.field_name, "data_type": s.data_type}
+                        for s in (field_schemas or [])
+                    ],
+                )
+                claim.tools_used.append({
+                    "tool": "run_cross_validation",
+                    "input": {"fields_checked": sorted(fields_to_check.keys())},
+                    "result": {"issues": report.issues_found},
+                })
+            except Exception:
+                pass  # LLM audit is best-effort; Python validation continues regardless
+
         new_issues: list[ValidationIssue] = []
         for field_name, source_map in field_data.items():
             values_only = {f: v for f, (v, _, _) in source_map.items()}
@@ -110,9 +144,6 @@ class ClaimParser:
             )
             if already:
                 continue
-
-            # Log tool calls for this multi-source field
-            claim.tools_used.append(check_field_consistency(field_name, values_only))
 
             # --- weighted voting ---
             weighted: dict[str, int] = {}
@@ -145,9 +176,6 @@ class ClaimParser:
                 resubmit_doc = None
 
                 if data_type == "string" and "vin" in field_name.lower():
-                    # Validate each unique VIN value and log the results
-                    for vin_val in {v for _, (v, _, _) in source_map.items()}:
-                        claim.tools_used.append(validate_vin(vin_val))
                     # Regex validity is a stronger signal than confidence weights for VINs.
                     # Filter to sources whose value passes the VIN format check first;
                     # then weighted-vote among those. If none pass, block.

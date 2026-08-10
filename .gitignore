@@ -11,3 +11,5 @@ build/
 claims/**/.cache/
 *.deskewed.png
 TODO.md
+CLAUDE.md
+UPGRADE.md

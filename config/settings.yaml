@@ -1,4 +1,4 @@
-model_id: "qwen_local"  # choose: "gemini", "qwen", or "qwen_local"
+model_id: "gemini"  # choose: "gemini", "qwen", or "qwen_local"
 
 gemini:
   model: "gemini-2.5-flash"
